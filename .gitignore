@@ -1,0 +1,5 @@
+dist/
+test-results/
+__pycache__/
+*.pyc
+node_modules/

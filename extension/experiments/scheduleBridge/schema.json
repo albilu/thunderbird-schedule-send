@@ -1,0 +1,12 @@
+[
+  {
+    "namespace": "scheduleBridge",
+    "functions": [
+      { "name": "start", "type": "function", "async": true, "parameters": [] },
+      { "name": "isOnline", "type": "function", "async": true, "parameters": [] },
+      { "name": "capture", "type": "function", "async": true, "parameters": [{ "name": "tabId", "type": "integer" }] },
+      { "name": "release", "type": "function", "async": true, "parameters": [{ "name": "tabId", "type": "integer" }, { "name": "close", "type": "boolean" }] },
+      { "name": "deliver", "type": "function", "async": true, "parameters": [{ "name": "payload", "type": "any" }] }
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "name": "thunderbird-scheduled-send",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A native-feeling email scheduler for Thunderbird",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "python3 scripts/package.py",
+    "test:thunderbird": "python3 tests/thunderbird_integration.py"
+  },
+  "engines": { "node": ">=22" }
+}

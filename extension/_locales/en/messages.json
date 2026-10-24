@@ -1,0 +1,338 @@
+{
+  "extensionName": {
+    "message": "Scheduled Send"
+  },
+  "extensionDescription": {
+    "message": "Schedule messages with recurring dates, delivery hours and weekday rules."
+  },
+  "scheduleSend": {
+    "message": "Schedule send"
+  },
+  "popupSubtitle": {
+    "message": "Your message, at the right time."
+  },
+  "queueTitle": {
+    "message": "Scheduled messages"
+  },
+  "queueSubtitle": {
+    "message": "Review what’s next and keep control of your sends."
+  },
+  "presets": {
+    "message": "Quick presets"
+  },
+  "inMinutes": {
+    "message": "In $1 min"
+  },
+  "afterDelay": {
+    "message": "After a delay"
+  },
+  "atDateTime": {
+    "message": "Date & time"
+  },
+  "scheduleType": {
+    "message": "When to send"
+  },
+  "delayLabel": {
+    "message": "Send in"
+  },
+  "minutes": {
+    "message": "minutes"
+  },
+  "dateLabel": {
+    "message": "Send on"
+  },
+  "localTimeZone": {
+    "message": "Local time · $1"
+  },
+  "repeat": {
+    "message": "Repeat"
+  },
+  "every": {
+    "message": "Every"
+  },
+  "everyMinute": {
+    "message": "Every minute"
+  },
+  "unit_none": {
+    "message": "Don’t repeat"
+  },
+  "unit_minutes": {
+    "message": "Every X minutes"
+  },
+  "unit_daily": {
+    "message": "Daily"
+  },
+  "unit_monthly": {
+    "message": "Monthly"
+  },
+  "unit_yearly": {
+    "message": "Yearly"
+  },
+  "repeat_none": {
+    "message": "One-time message"
+  },
+  "repeat_minutes": {
+    "message": "Every $1 minutes"
+  },
+  "repeat_daily": {
+    "message": "Every $1 days"
+  },
+  "repeat_monthly": {
+    "message": "Every $1 months"
+  },
+  "repeat_yearly": {
+    "message": "Every $1 years"
+  },
+  "deliveryRules": {
+    "message": "Delivery rules"
+  },
+  "useWindow": {
+    "message": "Only send between these hours"
+  },
+  "fromTime": {
+    "message": "From"
+  },
+  "untilTime": {
+    "message": "Until"
+  },
+  "useDays": {
+    "message": "Only on selected weekdays"
+  },
+  "windowHint": {
+    "message": "End time is excluded. Overnight windows use the weekday of the actual send date."
+  },
+  "nextDelivery": {
+    "message": "NEXT DELIVERY"
+  },
+  "thenDelivery": {
+    "message": "Then $1"
+  },
+  "oneTime": {
+    "message": "One-time send"
+  },
+  "deliveryNote": {
+    "message": "Thunderbird must be open and online. Late messages wait for the next permitted time."
+  },
+  "snapshotNote": {
+    "message": "Scheduled copies are stored on this device. Editing an existing draft does not change a scheduled copy. Missed repeats are skipped."
+  },
+  "viewQueue": {
+    "message": "View queue"
+  },
+  "scheduleMessage": {
+    "message": "Schedule"
+  },
+  "saving": {
+    "message": "Saving…"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "queueFilter": {
+    "message": "Show active schedules or history"
+  },
+  "activeSchedules": {
+    "message": "Upcoming"
+  },
+  "history": {
+    "message": "History"
+  },
+  "searchSchedules": {
+    "message": "Search messages"
+  },
+  "online": {
+    "message": "Ready to send"
+  },
+  "offline": {
+    "message": "Offline · sends are waiting"
+  },
+  "pause": {
+    "message": "Pause"
+  },
+  "resume": {
+    "message": "Resume"
+  },
+  "reschedule": {
+    "message": "Reschedule"
+  },
+  "reviewRetry": {
+    "message": "Review & retry"
+  },
+  "openCopy": {
+    "message": "Open a copy"
+  },
+  "cancelSchedule": {
+    "message": "Cancel schedule"
+  },
+  "removeHistory": {
+    "message": "Remove from history"
+  },
+  "scheduledFor": {
+    "message": "Scheduled for $1"
+  },
+  "sentAt": {
+    "message": "Sent $1"
+  },
+  "toRecipients": {
+    "message": "To: $1"
+  },
+  "otherRecipients": {
+    "message": "Cc / Bcc recipients"
+  },
+  "noSubject": {
+    "message": "(No subject)"
+  },
+  "windowSummary": {
+    "message": "Between $1 and $2"
+  },
+  "attachmentCount": {
+    "message": "$1 attachment(s)"
+  },
+  "sentCount": {
+    "message": "$1 sent"
+  },
+  "status_pending": {
+    "message": "Scheduled"
+  },
+  "status_paused": {
+    "message": "Paused"
+  },
+  "status_sending": {
+    "message": "Sending…"
+  },
+  "status_review": {
+    "message": "Needs review"
+  },
+  "status_sent": {
+    "message": "Sent"
+  },
+  "status_cancelled": {
+    "message": "Cancelled"
+  },
+  "emptyQueue": {
+    "message": "Nothing scheduled yet"
+  },
+  "emptyHistory": {
+    "message": "No past sends yet"
+  },
+  "emptyQueueHint": {
+    "message": "Compose a message, then choose Schedule send next to Send."
+  },
+  "noResults": {
+    "message": "No matching messages"
+  },
+  "searchHint": {
+    "message": "Try another subject or recipient."
+  },
+  "keepMessage": {
+    "message": "Go back"
+  },
+  "close": {
+    "message": "Close"
+  },
+  "saveSchedule": {
+    "message": "Save schedule"
+  },
+  "duplicateRisk": {
+    "message": "Delivery could not be confirmed. Check your Sent folder and mail server before retrying. Retrying may send this message twice."
+  },
+  "acceptRetry": {
+    "message": "Retry anyway"
+  },
+  "cancelDescription": {
+    "message": "Cancel all future sends and remove the stored message copy? Open a copy first if you want to keep editing it. Messages already sent cannot be recalled."
+  },
+  "restoredMessage": {
+    "message": "A copy is open for editing. The original schedule is paused; cancel it if you schedule the new copy."
+  },
+  "notificationReview": {
+    "message": "A scheduled message needs your attention. Open Scheduled messages to review it."
+  },
+  "errorDate": {
+    "message": "Choose a valid local date and time. Times skipped by daylight saving are unavailable."
+  },
+  "errorFuture": {
+    "message": "Choose a date and time in the future."
+  },
+  "errorInterval": {
+    "message": "Enter a whole repeat interval between 1 and 10,000."
+  },
+  "errorDelay": {
+    "message": "Enter a positive whole number of minutes."
+  },
+  "errorWindow": {
+    "message": "Choose two different, valid start and end times."
+  },
+  "errorWeekdays": {
+    "message": "Select at least one weekday."
+  },
+  "errorTimeZone": {
+    "message": "The system time zone has changed. Reschedule this message to confirm a time in the new zone."
+  },
+  "errorNoOccurrence": {
+    "message": "No delivery time is available for these rules."
+  },
+  "errorStorage": {
+    "message": "The scheduled message could not be stored. Check available disk space."
+  },
+  "errorInterrupted": {
+    "message": "Thunderbird stopped during delivery. Check your Sent folder before retrying to avoid a duplicate."
+  },
+  "errorMissingMessage": {
+    "message": "The stored message is unavailable. Cancel this schedule and compose the message again."
+  },
+  "errorDelivery": {
+    "message": "Delivery could not be confirmed. Check your Sent folder, connection and account settings before retrying."
+  },
+  "errorSending": {
+    "message": "This message is already being sent. Wait for the delivery to finish."
+  },
+  "errorAction": {
+    "message": "This action is no longer available. Refresh the queue."
+  },
+  "errorConfirmRetry": {
+    "message": "Review the previous delivery and confirm before retrying."
+  },
+  "errorCompose": {
+    "message": "Open this popup from a message’s compose window."
+  },
+  "errorComposeBusy": {
+    "message": "This message is busy. Wait for the current operation to finish."
+  },
+  "errorComposeClose": {
+    "message": "Your schedule was saved and paused because the compose window could not close. Open the queue to review it before resuming."
+  },
+  "errorEncryption": {
+    "message": "Scheduling encrypted or digitally signed messages is not supported yet. Your message has not been scheduled or changed."
+  },
+  "errorInlineImage": {
+    "message": "An embedded resource could not be saved. Attach it as a file or remove it before scheduling."
+  },
+  "errorBlockedContent": {
+    "message": "Thunderbird has blocked an embedded resource. Review its blocked-content notice or remove the resource before scheduling."
+  },
+  "errorTooLarge": {
+    "message": "The message and its attachments exceed the 50 MB scheduling limit."
+  },
+  "errorRecipients": {
+    "message": "Add at least one valid recipient before scheduling."
+  },
+  "errorIdentity": {
+    "message": "The sender account is unavailable. Check your Thunderbird account settings."
+  },
+  "errorNewsgroups": {
+    "message": "Scheduling newsgroup posts is not supported."
+  },
+  "errorSentCopy": {
+    "message": "The message was sent, but its Sent-folder copy could not be saved. Do not resend it."
+  },
+  "errorOffline": {
+    "message": "Thunderbird is offline. This message will wait for a connection."
+  },
+  "errorUnexpected": {
+    "message": "The operation could not be completed. Check the queue and try again."
+  },
+  "errorDisconnected": {
+    "message": "The add-on was reloaded. Close and reopen this page to reconnect."
+  }
+}

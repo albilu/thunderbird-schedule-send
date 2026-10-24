@@ -1,0 +1,41 @@
+{
+  "manifest_version": 2,
+  "name": "__MSG_extensionName__",
+  "description": "__MSG_extensionDescription__",
+  "version": "0.1.0",
+  "default_locale": "en",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "scheduled-send@thunderbird-schedule-send.local",
+      "strict_min_version": "153.0"
+    }
+  },
+  "permissions": ["accountsRead", "compose", "alarms", "storage", "unlimitedStorage", "notifications", "theme"],
+  "background": { "page": "background/background.html", "persistent": true },
+  "icons": { "32": "icons/schedule.svg", "64": "icons/schedule.svg" },
+  "compose_action": {
+    "default_title": "__MSG_scheduleSend__",
+    "default_label": "__MSG_scheduleSend__",
+    "default_icon": "icons/schedule.svg",
+    "theme_icons": [{ "light": "icons/schedule-light.svg", "dark": "icons/schedule.svg", "size": 32 }],
+    "default_area": "maintoolbar",
+    "default_popup": "popup/popup.html"
+  },
+  "browser_action": {
+    "default_title": "__MSG_queueTitle__",
+    "default_icon": "icons/schedule.svg",
+    "theme_icons": [{ "light": "icons/schedule-light.svg", "dark": "icons/schedule.svg", "size": 32 }]
+  },
+  "options_ui": { "page": "queue/queue.html", "open_in_tab": true },
+  "experiment_apis": {
+    "scheduleBridge": {
+      "schema": "experiments/scheduleBridge/schema.json",
+      "parent": {
+        "scopes": ["addon_parent"],
+        "paths": [["scheduleBridge"]],
+        "script": "experiments/scheduleBridge/api.js"
+      }
+    }
+  },
+  "content_security_policy": "script-src 'self'; object-src 'none'; base-uri 'none'"
+}

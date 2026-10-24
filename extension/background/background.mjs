@@ -1,0 +1,157 @@
+import { Scheduler } from "../lib/engine.mjs";
+import { ScheduleStore } from "../lib/store.mjs";
+import { localZone, ScheduleError } from "../lib/schedule.mjs";
+
+const api = messenger;
+const store = new ScheduleStore();
+const captures = new Set();
+const ports = new Set();
+const notified = new Set();
+const MAX_BYTES = 50 * 1024 * 1024;
+let queueTabId;
+
+async function changed() {
+  // A cosmetic failure must never make a committed schedule appear unsaved.
+  try {
+    const jobs = await store.all();
+    const active = jobs.filter(j => ["pending", "paused", "sending", "review"].includes(j.status));
+    await api.browserAction.setBadgeText({ text: active.length ? String(active.length) : "" });
+    await api.browserAction.setBadgeBackgroundColor({ color: active.some(j => j.status === "review") ? "#b45309" : "#1373d9" });
+    const due = jobs.filter(j => j.status === "pending").map(j => j.nextAt);
+    if (due.length) api.alarms.create("next-send", { when: Math.max(Date.now() + 1000, Math.min(...due)) });
+    else await api.alarms.clear("next-send");
+    for (const port of ports) {
+      try { port.postMessage({ type: "changed" }); } catch { ports.delete(port); }
+    }
+    for (const job of jobs.filter(j => j.status === "review" || j.error === "errorTimeZone")) {
+      const key = `${job.id}:${job.attemptedAt}:${job.error}`;
+      if (notified.has(key)) continue;
+      notified.add(key);
+      await api.notifications.create(`review-${job.id}`, {
+        type: "basic", iconUrl: api.runtime.getURL("icons/schedule.svg"),
+        title: api.i18n.getMessage("queueTitle"), message: api.i18n.getMessage("notificationReview")
+      });
+    }
+  } catch (error) { console.error("Scheduled Send UI update failed", error); }
+}
+
+function base64(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+  }
+  return btoa(binary);
+}
+
+const scheduler = new Scheduler({ store, changed,
+  online: async () => navigator.onLine && await api.scheduleBridge.isOnline(),
+  deliver: async payload => {
+    const attachments = [];
+    for (const attachment of payload.attachments) {
+      attachments.push({ name: attachment.name, type: attachment.type,
+        base64: base64(new Uint8Array(await attachment.file.arrayBuffer())) });
+    }
+    try { return await api.scheduleBridge.deliver({ ...payload, attachments }); }
+    catch (error) {
+      if (error.message.includes("errorOffline")) error.code = "errorOffline";
+      throw error;
+    }
+  }
+});
+
+async function schedule(tabId, rule) {
+  if (!Number.isInteger(tabId) || captures.has(tabId)) throw new ScheduleError("errorComposeBusy");
+  captures.add(tabId);
+  let locked = false;
+  let committed = false;
+  try {
+    const extra = await api.scheduleBridge.capture(tabId);
+    locked = true;
+    const details = await api.compose.getComposeDetails(tabId);
+    if (details.newsgroups?.length) throw new ScheduleError("errorNewsgroups");
+    if (extra.body) details.body = extra.body;
+    // Only durable values are retained. relatedMessageId is a session-only ID;
+    // the native References header is the durable thread relationship instead.
+    delete details.relatedMessageId;
+    const attachments = [];
+    let size = new Blob([details.body || details.plainTextBody || ""]).size;
+    for (const attachment of await api.compose.listAttachments(tabId)) {
+      const file = await api.compose.getAttachmentFile(attachment.id);
+      size += file.size;
+      if (size > MAX_BYTES) throw new ScheduleError("errorTooLarge");
+      attachments.push({ file, name: attachment.name, type: file.type });
+    }
+    if (size > MAX_BYTES) throw new ScheduleError("errorTooLarge");
+    const job = await scheduler.create(rule, { details, native: extra.native, attachments });
+    committed = true;
+    try { await api.scheduleBridge.release(tabId, true); }
+    catch (error) {
+      console.error("Scheduled message saved; compose close failed", error);
+      await scheduler.act(job.id, "pause");
+      throw new ScheduleError("errorComposeClose");
+    }
+    return job;
+  } finally {
+    if (locked && !committed) await api.scheduleBridge.release(tabId, false).catch(console.error);
+    captures.delete(tabId);
+  }
+}
+
+async function openQueue() {
+  if (queueTabId !== undefined) {
+    try { await api.tabs.update(queueTabId, { active: true }); return; } catch { queueTabId = undefined; }
+  }
+  const tab = await api.tabs.create({ url: api.runtime.getURL("queue/queue.html") });
+  queueTabId = tab.id;
+}
+
+const ready = (async () => {
+  await api.scheduleBridge.start();
+  await store.open();
+  await scheduler.initialize();
+  api.alarms.create("heartbeat", { periodInMinutes: 1 });
+})();
+
+api.runtime.onConnect.addListener(port => {
+  if (port.name !== "queue" || port.sender.id !== api.runtime.id) return;
+  ports.add(port);
+  port.onDisconnect.addListener(() => ports.delete(port));
+});
+
+api.runtime.onMessage.addListener(async (message, sender) => {
+  if (sender.id !== api.runtime.id || !sender.url?.startsWith(api.runtime.getURL(""))) return;
+  try {
+    await ready;
+    switch (message.type) {
+      case "schedule": return { ok: true, job: await schedule(message.tabId, message.rule) };
+      case "list": return { ok: true, jobs: await store.all(), online: navigator.onLine && await api.scheduleBridge.isOnline(), timeZone: localZone() };
+      case "act": return { ok: true, job: await scheduler.act(message.id, message.action, message.options) };
+      case "queue": await openQueue(); return { ok: true };
+      case "restore": {
+        // Pause BEFORE opening a copy, so editing can never race a due delivery.
+        const job = await store.get(message.id);
+        if (job?.status === "pending") await scheduler.act(job.id, "pause");
+        else if (!["paused", "review"].includes(job?.status)) throw new ScheduleError("errorAction");
+        const payload = await store.payload(message.id);
+        if (!payload) throw new ScheduleError("errorMissingMessage");
+        const details = { ...payload.details };
+        for (const key of ["type", "isModified", "selectedEncryptionTechnology"]) delete details[key];
+        details.attachments = payload.attachments.map(a => ({ file: a.file, name: a.name }));
+        await api.compose.beginNew(details);
+        return { ok: true };
+      }
+      default: throw new ScheduleError("errorAction");
+    }
+  } catch (error) {
+    console.error("Scheduled Send operation failed", error);
+    const code = error.code || /\berror[A-Z]\w+/.exec(error.message)?.[0] || "errorUnexpected";
+    return { ok: false, error: code, detail: String(error.message || error).slice(0, 600) };
+  }
+});
+
+const tick = () => ready.then(() => scheduler.tick()).catch(error => console.error("Scheduled Send queue check failed", error));
+api.alarms.onAlarm.addListener(alarm => { if (["heartbeat", "next-send"].includes(alarm.name)) void tick(); });
+window.addEventListener("online", tick);
+api.browserAction.onClicked.addListener(openQueue);
+api.notifications.onClicked.addListener(openQueue);
+ready.then(tick).catch(error => console.error("Scheduled Send initialization failed", error));

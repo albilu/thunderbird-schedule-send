@@ -1,0 +1,14 @@
+/* Popup viewport units are circular during Gecko's intrinsic-size negotiation. */
+html, body { width: 400px; height: 600px; overflow: hidden; }
+body { display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 12px; padding: 18px 20px 16px; flex: none; }
+header .hint { margin-top: 4px; }
+h1 { font-size: 19px; }
+.delivery-note { margin: 8px 0; }
+.presets { margin-bottom: 12px; }
+.repeat-row { margin: 14px 0; }
+.rules { margin-bottom: 12px; }
+#schedule-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.scroll-area { overflow-y: auto; min-height: 0; padding: 0 20px 4px; flex: 1; }
+footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+.error { margin-top: 10px; }
