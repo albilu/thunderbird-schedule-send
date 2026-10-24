@@ -6,7 +6,12 @@
         "name": "start",
         "type": "function",
         "async": true,
-        "parameters": []
+        "parameters": [
+          {
+            "name": "owner",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "isOnline",
@@ -46,12 +51,8 @@
         "async": true,
         "parameters": [
           {
-            "name": "payload",
+            "name": "job",
             "type": "any"
-          },
-          {
-            "name": "id",
-            "type": "string"
           }
         ]
       },
@@ -71,21 +72,41 @@
         ]
       },
       {
-        "name": "hasQueued",
+        "name": "hasDraft",
         "type": "function",
         "async": true,
         "parameters": [
           {
-            "name": "id",
-            "type": "string"
+            "name": "job",
+            "type": "any"
+          },
+          {
+            "name": "refresh",
+            "type": "boolean"
           }
         ]
       },
       {
-        "name": "queueFolder",
+        "name": "watchDraft",
         "type": "function",
         "async": true,
-        "parameters": []
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "draftsFolder",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "identityId",
+            "type": "any"
+          }
+        ]
       },
       {
         "name": "queuedId",
@@ -99,7 +120,7 @@
         ]
       },
       {
-        "name": "updateQueued",
+        "name": "updateDraft",
         "type": "function",
         "async": true,
         "parameters": [
@@ -110,17 +131,46 @@
         ]
       },
       {
-        "name": "removeQueued",
+        "name": "removeDraft",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "cancelDraft",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "editDraft",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "removeLegacy",
         "type": "function",
         "async": true,
         "parameters": [
           {
             "name": "id",
             "type": "string"
-          },
-          {
-            "name": "permanent",
-            "type": "boolean"
           }
         ]
       }

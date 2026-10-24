@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native integration tests: disposable Thunderbird profile + loopback SMTP.
+"""Native integration tests: disposable Thunderbird profile + loopback IMAP/SMTP.
 
 Never opens the user's profile. Mail is captured locally, not relayed. Requires
 Thunderbird 153+, Xvfb and optionally xfwm4 / ImageMagick for UI screenshots.
@@ -20,8 +20,10 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import quote, unquote
 
 from marionette import Marionette
+from imap_fixture import IMAPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCALE = os.environ.get("SCHEDULE_TEST_LOCALE", "en-US")
@@ -76,6 +78,15 @@ def request(client, value):
 
 def wait_page(client, path):
     client.wait(f"return [...testExtension.views].some(v => v.uri?.spec === testExtension.baseURI.resolve({json.dumps(path)}));")
+
+
+def wait_ui(client, path, expression):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if client.page(path, f"return {expression};"):
+            return
+        time.sleep(.1)
+    raise AssertionError(f"UI did not become ready: {expression}")
 
 
 def queue(client):
@@ -153,7 +164,16 @@ def theme_tests(client):
         """, original)
 
 
-def run_tests(client, xpi, smtp):
+def queued_raw(imap, job_id):
+    with imap.lock:
+        for message in imap.mailboxes["Drafts"]:
+            if b"X-Scheduled-Send:" in message["raw"] and job_id.encode() in re.sub(br"\r\n[ \t]+", b"", message["raw"]) and "\\Deleted" not in message["flags"]:
+                return message
+    return None
+
+
+def run_tests(client, xpi, smtp, imap):
+    client.script("Services.io.offline = false;")
     print(f"Thunderbird {client.script('return Services.appinfo.version;')}, locale {LOCALE}", flush=True)
     installed = client.async_script("""
       const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
@@ -175,6 +195,13 @@ def run_tests(client, xpi, smtp):
     assert client.script("return !testCompose.gWindowLocked;")
     client.script("testCompose.onUnblockResource(arguments[0], testCompose.document.getElementById('blockedContentOptions'));", client.inline_image.as_uri())
     print("PASS: native blocked-resource protection is respected before capturing a message", flush=True)
+    client.script("Services.prefs.setStringPref('mail.identity.id1.draft_folder', 'mailbox://nobody@Local%20Folders/Drafts');")
+    local = client.page(QUEUE, f"return {API}.runtime.sendMessage(arguments[0]);", {"type": "schedule", "tabId": tab["id"], "rule": {"startAt": int(time.time() * 1000) + 3600000}})
+    assert local.get("error") == "errorServerDrafts", local
+    assert client.script("return !testCompose.closed && !testCompose.gWindowLocked;")
+    client.script("Services.prefs.setStringPref('mail.identity.id1.draft_folder', 'imap://sender@127.0.0.1/Drafts');")
+    assert not imap.mailboxes["Drafts"]
+    print("PASS: local Drafts is rejected without closing or changing the composition", flush=True)
     client.background(f"return {API}.composeAction.openPopup({{windowId: arguments[0]}});", tab["windowId"])
     wait_page(client, POPUP)
     time.sleep(.5)
@@ -201,7 +228,7 @@ def run_tests(client, xpi, smtp):
       return document.getElementById('submit').disabled;
     """)
     client.page(POPUP, """document.querySelector('input[id$="useWindow"]').click(); document.querySelector('input[id$="useDays"]').click(); document.getElementById('submit').click();""")
-    end = time.monotonic() + 15
+    end = time.monotonic() + 25
     saved = []
     while time.monotonic() < end:
         saved = request(client, {"type": "list"})["jobs"]
@@ -209,7 +236,6 @@ def run_tests(client, xpi, smtp):
             break
         time.sleep(.1)
     if len(saved) != 1:
-        print("Capture diagnostic:", client.page(QUEUE, f"return {API}.runtime.sendMessage(arguments[0]);", {"type": "schedule", "tabId": tab["id"], "rule": {"startAt": int(time.time() * 1000) + 3600000}}), flush=True)
         print("Compose:", client.script("return {locked: testCompose.gWindowLocked, save: testCompose.gSaveOperationInProgress, send: testCompose.gSendOperationInProgress};"), flush=True)
         print("Popup:", client.page(POPUP, "return {error: document.getElementById('error').textContent, disabled: document.getElementById('submit').disabled, label: document.getElementById('submit').textContent, validity: [...document.querySelectorAll('input')].map(i => ({id: i.id, value: i.value, disabled: i.disabled, valid: i.validity.valid}))};"), flush=True)
     assert len(saved) == 1, saved
@@ -217,9 +243,8 @@ def run_tests(client, xpi, smtp):
     assert job["status"] == "pending" and job["attachmentCount"] == 1, job
     assert client.background(f"return {API}.browserAction.getBadgeText({{}});") == "1"
     client.wait("return testCompose.closed;")
-    preserved = modify_jobs(client, "const jobs = await store.all(); const payload = await store.payload(jobs[0].id); return {text: await payload.attachments[0].file.text(), references: payload.native.references};")
-    assert "Café" in preserved["text"] and preserved["references"] == "<parent@example.invalid>", preserved
-    assert modify_jobs(client, "return !(await store.payload((await store.all())[0].id)).details.body.includes('file:');")
+    assert modify_jobs(client, "return !(await store.payload((await store.all())[0].id));")
+    assert job["draft"]["folderURI"].startswith("imap:"), job
     client.inline_image.unlink()
     assert not smtp.messages
     print("PASS: native adjacent button, translated popup, presets, constraints, durable snapshot and compose close", flush=True)
@@ -227,14 +252,15 @@ def run_tests(client, xpi, smtp):
     # The queue contains actual readable RFC822 messages, independent of the UI.
     native = client.background(f"""
       const api = {API};
-      const folder = await api.scheduleBridge.queueFolder();
+      const folder = await api.scheduleBridge.draftsFolder(null);
       const messages = (await api.messages.list(folder.id)).messages;
       const raw = await api.messages.getRaw(messages[0].id);
       return {{folder, messages, raw: typeof raw === 'string' ? raw : await raw.text(),
         options: api.runtime.getManifest().options_ui || null}};
     """)
-    assert native["folder"]["name"] == MESSAGES["queueFolder"]["message"], native
+    assert native["folder"]["name"] == "Drafts", native
     assert len(native["messages"]) == 1 and native["options"] is None
+    assert queued_raw(imap, job["id"]), "Draft must exist on the server"
     queued_mail = BytesParser(policy=email.policy.default).parsebytes(native["raw"].encode())
     assert queued_mail["Subject"] == job["subject"]
     assert "hidden@example.invalid" in str(queued_mail["Bcc"])
@@ -243,21 +269,46 @@ def run_tests(client, xpi, smtp):
     request(client, {"type": "queue"})
     request(client, {"type": "queue"})
     assert client.background(f"return (await {API}.mailTabs.query({{}})).filter(t => t.displayedFolder?.id === arguments[0]).length;", native["folder"]["id"]) == 1
-    print("PASS: real local-folder MIME copies, status tags and native queue navigation", flush=True)
+    print("PASS: server Drafts, synchronized MIME, status highlighting and native navigation", flush=True)
 
-    # Simulate legacy metadata and an interrupted migration with a copy already
-    # present. Reload must create exactly one copy per active schedule.
+    # A user-created copy in another folder is ordinary mail, even with the
+    # same Message-ID. Its controls/deletion must not affect the real schedule.
+    copied_folder = client.async_script("""
+      const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+      const { MailUtils } = ChromeUtils.importESModule('resource:///modules/MailUtils.sys.mjs');
+      const source = MailUtils.getExistingFolder(arguments[0]);
+      const destination = MailServices.accounts.localFoldersServer.rootFolder.getChildNamed('Sent');
+      const header = source.msgDatabase.getMsgHdrForMessageID(arguments[1]);
+      await new Promise((resolve, reject) => MailServices.copy.copyMessages(source, [header], destination, false, {
+        onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() {return '';},
+        onStopCopy(status) { if (Components.isSuccessCode(status)) resolve(); else reject(new Error(String(status))); }
+      }, null, false));
+      return testExtension.folderManager.convert(destination);
+    """, job["draft"]["folderURI"], job["draft"]["messageId"])
+    assert client.background(f"""
+      const message = (await {API}.messages.list(arguments[0])).messages[0];
+      return await {API}.scheduleBridge.queuedId(message.id);
+    """, copied_folder["id"]) is None
+    client.script("""
+      const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+      const folder = MailServices.accounts.localFoldersServer.rootFolder.getChildNamed('Sent');
+      folder.deleteMessages([...folder.messages], null, true, false, null, false);
+    """)
+    assert request(client, {"type": "list"})["jobs"][0]["status"] == "pending"
+    assert queued_raw(imap, job["id"])
+    print("PASS: unrelated copies cannot control or cancel the scheduled server draft", flush=True)
+
+    # Migrate a schedule from the initial private-payload implementation.
     legacy_id = modify_jobs(client, f"""
       const original = await store.get({json.dumps(job['id'])});
-      delete original.folderBacked;
-      await store.put(original);
       const legacy = {{...original, id: crypto.randomUUID(), subject: 'Legacy migration fixture'}};
-      const payload = await store.payload(original.id);
-      payload.details.subject = legacy.subject;
-      await store.create(legacy, payload);
+      delete legacy.draft; delete legacy.owner;
+      await store.create(legacy, {{details: {{identityId: 'id1', subject: legacy.subject,
+        to: ['receiver@example.invalid'], isPlainText: true, plainTextBody: 'Legacy saved content'}},
+        native: {{from: 'sender@example.invalid', to: 'receiver@example.invalid'}}, attachments: []}});
       return legacy.id;
     """)
-    # A real add-on shutdown/restart must retain both the queue and File objects.
+    # A real add-on shutdown/restart retains the journal and migrates old bytes.
     client.async_script("""
       const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
       const addon = await AddonManager.getAddonByID(arguments[0]);
@@ -266,11 +317,12 @@ def run_tests(client, xpi, smtp):
     set_extension(client)
     migrated = queue(client)["jobs"]
     assert {j["id"] for j in migrated} == {job["id"], legacy_id}
-    assert all(j["folderBacked"] for j in migrated)
-    assert "Café" in modify_jobs(client, "const jobs = await store.all(); return await (await store.payload(jobs[0].id)).attachments[0].file.text();")
-    assert client.background(f"return (await {API}.messages.list((await {API}.scheduleBridge.queueFolder()).id)).messages.length;") == 2
+    assert all(j["draft"]["folderURI"].startswith("imap:") for j in migrated)
+    assert modify_jobs(client, "return !(await store.payload((await store.all())[0].id));")
+    assert client.background(f"return (await {API}.messages.list((await {API}.scheduleBridge.draftsFolder(null)).id)).messages.length;") == 2
     request(client, {"type": "act", "id": legacy_id, "action": "cancel"})
-    assert client.background(f"return (await {API}.messages.list((await {API}.scheduleBridge.queueFolder()).id)).messages.length;") == 1
+    assert not queued_raw(imap, legacy_id)
+    assert any(b'Legacy saved content' in m['raw'] and b'X-Scheduled-Send:' not in m['raw'] for m in imap.mailboxes['Drafts'])
     request(client, {"type": "act", "id": legacy_id, "action": "remove"})
     print("PASS: restart durability and idempotent migration of existing schedules", flush=True)
 
@@ -278,6 +330,9 @@ def run_tests(client, xpi, smtp):
     assert request(client, {"type": "list"})["jobs"][0]["status"] == "paused"
     request(client, {"type": "act", "id": job["id"], "action": "resume"})
     client.script("Services.io.offline = true;")
+    server_draft = queued_raw(imap, job["id"])
+    assert b"scheduled world" in server_draft["raw"]
+    imap.replace(server_draft["uid"], server_draft["raw"].replace(b"scheduled world", b"edited on another client"))
     modify_jobs(client, "for (const job of await store.all()) {job.nextAt = Date.now() - 1000; await store.put(job);} await api.alarms.create('next-send', {when: Date.now() + 100});")
     time.sleep(.8)
     assert not smtp.messages
@@ -304,7 +359,7 @@ def run_tests(client, xpi, smtp):
     assert message["Bcc"] is None, "Bcc must not leak in the message headers"
     assert any("hidden@example.invalid" in r for r in recipients), recipients
     html = message.get_body(preferencelist=("html",)).get_content()
-    assert "scheduled world" in html and "café" in html
+    assert "edited on another client" in html and "café" in html, html
     references = set(re.findall(r'cid:([^"\s>]+)', html))
     content_ids = {part["Content-ID"].strip("<>") for part in message.walk() if part["Content-ID"]}
     assert references and references.issubset(content_ids), (references, content_ids)
@@ -313,7 +368,8 @@ def run_tests(client, xpi, smtp):
     assert len(attachments) == 1 and "Café" in attachments[0].get_payload(decode=True).decode(), attachments
     assert any(part.get_content_type() == "image/gif" for part in message.walk()), [part.get_content_type() for part in message.walk()]
     assert modify_jobs(client, "return (await store.payload((await store.all())[0].id)) === undefined;")
-    print("PASS: real background SMTP delivery, offline wait, HTML, attachment bytes, inline image, reply headers, Bcc privacy and payload cleanup", flush=True)
+    assert message["X-Scheduled-Send"] is None
+    print("PASS: external IMAP draft edits reach SMTP; offline wait, HTML, attachments, inline images, reply headers and Bcc privacy", flush=True)
 
     client.script("Services.prefs.setStringPref('mail.identity.id1.escapedVCard', encodeURIComponent('BEGIN:VCARD\\r\\nVERSION:3.0\\r\\nFN:Scheduled Test\\r\\nEMAIL:sender@example.invalid\\r\\nEND:VCARD\\r\\n'));")
     plain = client.background(f"""
@@ -345,7 +401,7 @@ def run_tests(client, xpi, smtp):
     request(client, {"type": "queue"})
     selected = client.background(f"""
       const api = {API};
-      const folder = await api.scheduleBridge.queueFolder();
+      const folder = await api.scheduleBridge.draftsFolder(null);
       const tabs = await api.mailTabs.query({{}});
       const tab = tabs.find(t => t.displayedFolder?.id === folder.id);
       const messages = (await api.messages.list(folder.id)).messages;
@@ -365,45 +421,78 @@ def run_tests(client, xpi, smtp):
     client.page(MANAGE, "document.querySelector('button[data-action=" + '"reschedule"' + "]').click();")
     assert client.page(MANAGE, "return document.getElementById('edit-dialog').open;")
     client.page(MANAGE, "document.querySelector('#edit-rule select').value = 'yearly'; document.querySelector('#edit-rule select').dispatchEvent(new Event('change', {bubbles:true})); document.getElementById('save-edit').click();")
-    time.sleep(.3)
+    wait_ui(client, MANAGE, "!document.getElementById('edit-dialog').open && !document.querySelector('button[data-action=pause]')?.disabled")
     edited = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])
     assert edited["rule"]["recurrence"]["unit"] == "yearly", edited
     client.page(MANAGE, "document.querySelector('button[data-action=\"pause\"]').click();")
-    time.sleep(.2)
+    wait_ui(client, MANAGE, "document.querySelector('button[data-action=resume]') && !document.querySelector('button[data-action=resume]').disabled")
     client.page(MANAGE, "document.querySelector('button[data-action=\"resume\"]').click();")
-    time.sleep(.2)
-    request(client, {"type": "restore", "id": recurring["id"]})
-    assert next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])["status"] == "paused"
-    # Close the editable copy without sending and cancel via the native action.
+    wait_ui(client, MANAGE, "document.querySelector('button[data-action=pause]') && !document.querySelector('button[data-action=pause]').disabled")
+    request(client, {"type": "edit", "id": recurring["id"]})
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        state = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])
+        if state["status"] == "cancelled" and state.get("draftCleaned"):
+            break
+        time.sleep(.1)
+    assert state["status"] == "cancelled" and state.get("draftCleaned"), state
+    assert not queued_raw(imap, recurring["id"])
+    ordinary = [BytesParser(policy=email.policy.default).parsebytes(m["raw"]) for m in imap.mailboxes["Drafts"] if b"Subject: Recurring check" in m["raw"] and "\\Deleted" not in m["flags"]]
+    assert len(ordinary) == 1 and ordinary[0]["X-Scheduled-Send"] is None
+    assert "scheduled world" in ordinary[0].get_body(preferencelist=("html",)).get_content()
+    assert any(p.get_content_type() == "image/gif" for p in ordinary[0].walk())
     client.script("""
       const copy = Services.wm.getMostRecentWindow('msgcompose');
       copy.gContentChanged = false; copy.gMsgCompose.bodyModified = false;
       copy.close();
       Services.wm.getMostRecentWindow('mail:3pane').focus();
     """)
-    client.background(f"return {API}.messageDisplayAction.openPopup({{windowId: arguments[0]}});", selected["tab"]["windowId"])
-    wait_page(client, MANAGE)
-    time.sleep(.3)
-    client.page(MANAGE, "document.querySelector('button[data-action=\"cancel\"]').click();")
-    assert client.page(MANAGE, "return document.getElementById('confirmation').open;")
-    client.page(MANAGE, "document.getElementById('confirm-action').click();")
-    time.sleep(.3)
-    assert next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])["status"] == "cancelled"
-    print("PASS: native message controls, reschedule, restored copy, pause, resume and cancellation", flush=True)
+    print("PASS: Drafts controls, reschedule, pause/resume; opening the actual draft cancels its schedule", flush=True)
+
+    # Other mail clients may discard custom headers. Never send a stale local
+    # copy, nor claim a draft carrying another profile's scheduling identity.
+    for external_change in ["removed metadata", "foreign owner"]:
+        tab = create_compose(client, f"External {external_change}", attachment=False)
+        external = request(client, {"type": "schedule", "tabId": tab["id"], "rule": {"startAt": int(time.time() * 1000) + 3600000}})["job"]
+        client.script("Services.io.offline = true;")
+        original = queued_raw(imap, external["id"])
+        pattern = br"^X-Scheduled-Send:[^\r\n]*(?:\r\n[ \t][^\r\n]*)*\r\n"
+        header = re.search(pattern, original["raw"], re.M)[0]
+        replacement = b""
+        if external_change == "foreign owner":
+            metadata = json.loads(unquote(re.sub(br"\s", b"", header.split(b":", 1)[1]).decode()))
+            metadata["owner"] = "another-thunderbird-profile"
+            replacement = b"X-Scheduled-Send: " + quote(json.dumps(metadata, separators=(",", ":"))).encode() + b"\r\n"
+        raw = original["raw"].replace(header, replacement)
+        edited_draft = imap.replace(original["uid"], raw)
+        modify_jobs(client, f"const job = await store.get({json.dumps(external['id'])}); job.nextAt = Date.now() - 1000; await store.put(job);")
+        client.script("Services.io.offline = false;")
+        client.background(f"return {API}.alarms.create('next-send', {{when: Date.now() + 100}});")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            state = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == external["id"])
+            if state["status"] == "cancelled" and state.get("draftCleaned"):
+                break
+            time.sleep(.1)
+        assert state["status"] == "cancelled", state
+        assert edited_draft in imap.mailboxes["Drafts"] and edited_draft["raw"] == raw
+        assert len(smtp.messages) == 2
+    print("PASS: discarded schedule headers and foreign ownership prevent delivery without changing the server draft", flush=True)
 
     # Native actions must cancel without relying on the custom controls or
-    # waiting for the next send alarm, including while Thunderbird is offline.
-    client.script("Services.io.offline = true;")
+    # waiting for the next send alarm.
     for action in ["delete", "move"]:
         tab = create_compose(client, f"Native {action} fixture", attachment=False)
         removed = request(client, {"type": "schedule", "tabId": tab["id"], "rule": {"startAt": int(time.time() * 1000) + 3600000}})["job"]
         if action == "move":
             request(client, {"type": "act", "id": removed["id"], "action": "pause"})
+            removed = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == removed["id"])
         client.async_script("""
           const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+          const { MailUtils } = ChromeUtils.importESModule('resource:///modules/MailUtils.sys.mjs');
+          const folder = MailUtils.getExistingFolder(arguments[0]);
+          const header = folder.msgDatabase.getMsgHdrForMessageID(arguments[1]);
           const root = MailServices.accounts.localFoldersServer.rootFolder;
-          const folder = [...root.subFolders].find(f => f.getStringProperty('scheduledSendOwner') === arguments[0]);
-          const header = folder.msgDatabase.getMsgHdrForMessageID(`scheduled-send-${arguments[1]}@scheduled-send.local`);
           await new Promise((resolve, reject) => {
             const listener = {
               onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() {return '';},
@@ -412,7 +501,7 @@ def run_tests(client, xpi, smtp):
             if (arguments[2] === 'move') MailServices.copy.copyMessages(folder, [header], root.getChildNamed('Sent'), true, listener, null, false);
             else folder.deleteMessages([header], null, false, false, listener, false);
           });
-        """, ADDON, removed["id"], action)
+        """, removed["draft"]["folderURI"], removed["draft"]["messageId"], action)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             cancelled = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == removed["id"])
@@ -423,7 +512,7 @@ def run_tests(client, xpi, smtp):
         assert modify_jobs(client, f"return !(await store.payload({json.dumps(removed['id'])}));")
         assert len(smtp.messages) == 2
     client.script("Services.io.offline = false;")
-    print("PASS: native delete and move cancel pending/paused mail while offline", flush=True)
+    print("PASS: native IMAP delete and move cancel pending/paused drafts", flush=True)
 
     # Mark a durable send as interrupted, reload, and verify no retransmission.
     tab = create_compose(client, "Interrupted fixture", attachment=False)
@@ -463,10 +552,11 @@ def main():
     subprocess.run([sys.executable, str(ROOT / "scripts/package.py")], check=True)
     version = json.loads((ROOT / "extension/manifest.json").read_text())["version"]
     xpi = ROOT / "dist" / f"thunderbird-scheduled-send-{version}.xpi"
-    with SMTPServer(("127.0.0.1", 0), SMTPHandler) as smtp, tempfile.TemporaryDirectory(prefix="scheduled-send-test-") as temporary:
+    with IMAPServer() as imap, SMTPServer(("127.0.0.1", 0), SMTPHandler) as smtp, tempfile.TemporaryDirectory(prefix="scheduled-send-test-") as temporary:
         smtp.messages = []
         thread = threading.Thread(target=smtp.serve_forever, daemon=True)
         thread.start()
+        threading.Thread(target=imap.serve_forever, daemon=True).start()
         profile = Path(temporary) / "profile"
         profile.mkdir()
         (profile / "Mail" / "Local Folders").mkdir(parents=True)
@@ -480,15 +570,22 @@ def main():
             "marionette.port": port, "marionette.enabled": True,
             "mail.shell.checkDefaultClient": False, "mail.provider.enabled": False,
             "mail.provider.suppress_dialog_on_startup": True, "mailnews.start_page.enabled": False,
-            "mail.accountmanager.accounts": "account1", "mail.accountmanager.defaultaccount": "account1",
+            "mail.accountmanager.accounts": "account2,account1", "mail.accountmanager.defaultaccount": "account2",
+            "mail.account.account2.server": "server2", "mail.account.account2.identities": "id1",
+            "mail.server.server2.type": "imap", "mail.server.server2.hostname": "127.0.0.1",
+            "mail.server.server2.name": "IMAP Test Account", "mail.server.server2.userName": "sender",
+            "mail.server.server2.port": imap.server_address[1], "mail.server.server2.socketType": 0,
+            "mail.server.server2.authMethod": 3, "mail.server.server2.login_at_startup": False,
+            "mail.server.server2.check_new_mail": False, "mail.server.server2.delete_model": 1,
+            "mail.imap.mime_parts_on_demand": False,
             "mail.accountmanager.localfoldersserver": "server1", "mail.account.account1.server": "server1",
-            "mail.account.account1.identities": "id1", "mail.server.server1.type": "none",
+            "mail.account.account1.identities": "", "mail.server.server1.type": "none",
             "mail.server.server1.hostname": "Local Folders", "mail.server.server1.name": "Local Folders",
             "mail.server.server1.userName": "nobody", "mail.server.server1.directory": str(profile / "Mail" / "Local Folders"),
             "mail.identity.id1.fullName": "Scheduled Send Test", "mail.identity.id1.useremail": "sender@example.invalid",
             "mail.identity.id1.compose_html": True, "mail.identity.id1.fcc": True,
             "mail.identity.id1.fcc_folder": "mailbox://nobody@Local%20Folders/Sent",
-            "mail.identity.id1.draft_folder": "mailbox://nobody@Local%20Folders/Drafts",
+            "mail.identity.id1.draft_folder": "imap://sender@127.0.0.1/Drafts",
             "mail.smtpservers": "smtp1", "mail.smtp.defaultserver": "smtp1", "mail.identity.id1.smtpServer": "smtp1",
             "mail.smtpserver.smtp1.hostname": "127.0.0.1", "mail.smtpserver.smtp1.port": smtp.server_address[1],
             "mail.smtpserver.smtp1.authMethod": 1, "mail.smtpserver.smtp1.try_ssl": 0,
@@ -523,8 +620,9 @@ def main():
                 client.test_env = env
                 client.inline_image = inline_image
                 client.script("Services.locale.availableLocales = [...new Set([...Services.locale.availableLocales, arguments[0]])]; Services.locale.requestedLocales = [arguments[0]];", LOCALE)
-                run_tests(client, xpi, smtp)
+                run_tests(client, xpi, smtp, imap)
             except Exception:
+                print("IMAP errors:", imap.errors, "Recent commands:", imap.commands[-30:], flush=True)
                 if client:
                     try:
                         print("Diagnostics:", client.script("return Services.console.getMessageArray().slice(-20).map(item => item.message);"), flush=True)
@@ -544,6 +642,8 @@ def main():
                             child.kill()
                             child.wait()
                 smtp.shutdown()
+                imap.shutdown()
+                (RESULTS / 'imap.log').write_text('\n'.join(imap.commands))
 
 
 if __name__ == "__main__":

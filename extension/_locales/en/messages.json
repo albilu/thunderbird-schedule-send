@@ -12,7 +12,7 @@
     "message": "Your message, at the right time."
   },
   "queueTitle": {
-    "message": "Scheduled messages"
+    "message": "Scheduled drafts"
   },
   "presets": {
     "message": "Quick presets"
@@ -111,10 +111,10 @@
     "message": "Thunderbird must be open and online. Late messages wait for the next permitted time."
   },
   "snapshotNote": {
-    "message": "Scheduled copies are stored on this device. Editing an existing draft does not change a scheduled copy. Missed repeats are skipped."
+    "message": "The message is saved in your account’s Drafts folder. Only this Thunderbird instance sends it."
   },
   "viewQueue": {
-    "message": "Open Scheduled Send folder"
+    "message": "Open Drafts"
   },
   "scheduleMessage": {
     "message": "Schedule"
@@ -142,9 +142,6 @@
   },
   "reviewRetry": {
     "message": "Review & retry"
-  },
-  "openCopy": {
-    "message": "Open a copy"
   },
   "cancelSchedule": {
     "message": "Cancel schedule"
@@ -207,13 +204,10 @@
     "message": "Retry anyway"
   },
   "cancelDescription": {
-    "message": "Cancel all future sends and move the scheduled copy to Trash? Messages already sent cannot be recalled."
-  },
-  "restoredMessage": {
-    "message": "A copy is open for editing. The original schedule is paused; cancel it if you schedule the new copy."
+    "message": "Cancel all future sends and keep the message as an ordinary draft? Messages already sent cannot be recalled."
   },
   "notificationReview": {
-    "message": "A scheduled message needs your attention. Open Scheduled messages to review it."
+    "message": "A scheduled draft needs your attention. Open Drafts to review it."
   },
   "errorDate": {
     "message": "Choose a valid local date and time. Times skipped by daylight saving are unavailable."
@@ -240,13 +234,13 @@
     "message": "No delivery time is available for these rules."
   },
   "errorStorage": {
-    "message": "The scheduled message could not be stored. Check available disk space."
+    "message": "The scheduled draft could not be saved. Check your connection, mail account storage and available disk space."
   },
   "errorInterrupted": {
     "message": "Thunderbird stopped during delivery. Check your Sent folder before retrying to avoid a duplicate."
   },
   "errorMissingMessage": {
-    "message": "The stored message is unavailable. Cancel this schedule and compose the message again."
+    "message": "The scheduled draft is unavailable. Check your account’s Drafts folder."
   },
   "errorDelivery": {
     "message": "Delivery could not be confirmed. Check your Sent folder, connection and account settings before retrying."
@@ -294,7 +288,7 @@
     "message": "The message was sent, but its Sent-folder copy could not be saved. Do not resend it."
   },
   "errorOffline": {
-    "message": "Thunderbird is offline. This message will wait for a connection."
+    "message": "The mail server is unavailable. Connect before saving a new schedule. Already scheduled messages will wait."
   },
   "errorUnexpected": {
     "message": "The operation could not be completed. Check the queue and try again."
@@ -302,22 +296,28 @@
   "errorDisconnected": {
     "message": "The add-on was reloaded. Close and reopen this page to reconnect."
   },
-  "queueFolder": {
-    "message": "Scheduled Send"
-  },
   "manageSchedule": {
     "message": "Manage schedule"
   },
   "selectScheduledMessage": {
-    "message": "Select a message in the Scheduled Send folder to manage its schedule."
+    "message": "Select a highlighted scheduled message in your account’s Drafts folder."
   },
   "inactiveMessage": {
-    "message": "This copy has no active schedule. Moving a message into this folder does not schedule it."
+    "message": "This draft has no schedule on this Thunderbird instance."
   },
   "folderNote": {
-    "message": "Moving or deleting this message cancels future sends. A send already in progress cannot be recalled."
+    "message": "Editing a scheduled draft cancels its schedule. Schedule it again when your changes are ready."
   },
   "errorQueueRemoved": {
-    "message": "The message was moved or deleted from Scheduled Send. Its schedule has been cancelled."
+    "message": "This draft was edited, moved or deleted. Its schedule has been cancelled."
+  },
+  "editDraft": {
+    "message": "Edit draft"
+  },
+  "errorServerDrafts": {
+    "message": "Choose a Drafts folder on your IMAP account in Account Settings → Copies & Folders before scheduling. Local folders cannot synchronize your drafts."
+  },
+  "errorDraftMigration": {
+    "message": "A previous schedule could not be moved to server Drafts. It is paused and its original contents are retained. Check your IMAP Drafts settings and connection, then reload the add-on."
   }
 }

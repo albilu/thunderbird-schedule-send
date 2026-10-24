@@ -6,6 +6,7 @@ void applyTheme();
 const $ = id => document.getElementById(id);
 let job;
 let messageId;
+let jobId;
 let editing;
 let editForm;
 let loading = false;
@@ -41,7 +42,7 @@ function render() {
     if (job.status === "paused") controls.append(button("resume", "resume"));
     if (job.status === "review") controls.append(button("resume", "reviewRetry"));
     if (["pending", "paused", "review"].includes(job.status)) {
-      controls.append(button("reschedule", "reschedule"), button("restore", "openCopy"), button("cancel", "cancelSchedule", "subtle danger"));
+      controls.append(button("reschedule", "reschedule"), button("edit", "editDraft"), button("cancel", "cancelSchedule", "subtle danger"));
     }
     const when = job.nextAt ? t("scheduledFor", formatDate(job.nextAt, job.rule.timeZone))
       : job.lastSentAt ? t("sentAt", formatDate(job.lastSentAt, job.rule.timeZone)) : t("status_cancelled");
@@ -69,8 +70,9 @@ async function load() {
       if (tab && ["mail", "messageDisplay"].includes(tab.type)) messageId = (await messenger.messageDisplay.getDisplayedMessage(tab.id))?.id;
     }
     if (messageId) {
-      const response = await request({ type: "selected", messageId });
+      const response = await request(jobId ? { type: "job", id: jobId } : { type: "selected", messageId });
       job = response.job;
+      jobId = job?.id || jobId;
       $("connection").textContent = t(response.online ? "online" : "offline");
       $("connection").classList.toggle("offline", !response.online);
     }
@@ -105,9 +107,9 @@ async function act(job, action) {
       $("edit-dialog").showModal();
       return;
     }
-    if (action === "restore") {
-      await request({ type: "restore", id: job.id });
-      $("feedback").textContent = t("restoredMessage");
+    if (action === "edit") {
+      await request({ type: "edit", id: job.id });
+      window.close();
     } else await request({ type: "act", id: job.id, action, options });
     await load();
   } catch (error) { $("error").textContent = error.message; }
@@ -129,7 +131,7 @@ $("edit-form").addEventListener("submit", async event => {
 $("close-edit").addEventListener("click", () => $("edit-dialog").close());
 $("edit-dialog").addEventListener("close", () => editForm?.destroy());
 $("folder").addEventListener("click", async () => {
-  try { await request({ type: "queue" }); window.close(); }
+  try { await request({ type: "queue", id: job?.id }); window.close(); }
   catch (error) { $("error").textContent = errorText(error); }
 });
 $("refresh").addEventListener("click", load);

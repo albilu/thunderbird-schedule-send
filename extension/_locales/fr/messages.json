@@ -12,7 +12,7 @@
     "message": "Votre message, au bon moment."
   },
   "queueTitle": {
-    "message": "Messages programmés"
+    "message": "Brouillons programmés"
   },
   "presets": {
     "message": "Délais prédéfinis"
@@ -111,10 +111,10 @@
     "message": "Thunderbird doit être ouvert et connecté. Les messages en retard attendent le prochain créneau autorisé."
   },
   "snapshotNote": {
-    "message": "Les copies programmées sont stockées sur cet appareil. Modifier un brouillon existant ne modifie pas sa copie programmée. Les récurrences manquées sont ignorées."
+    "message": "Le message est enregistré dans le dossier Brouillons de votre compte. Seule cette instance de Thunderbird l’envoie."
   },
   "viewQueue": {
-    "message": "Ouvrir le dossier Envois programmés"
+    "message": "Ouvrir les brouillons"
   },
   "scheduleMessage": {
     "message": "Programmer"
@@ -142,9 +142,6 @@
   },
   "reviewRetry": {
     "message": "Vérifier et réessayer"
-  },
-  "openCopy": {
-    "message": "Ouvrir une copie"
   },
   "cancelSchedule": {
     "message": "Annuler l’envoi"
@@ -207,13 +204,10 @@
     "message": "Réessayer quand même"
   },
   "cancelDescription": {
-    "message": "Annuler tous les envois futurs et déplacer la copie programmée vers la corbeille ? Les messages déjà envoyés ne peuvent pas être rappelés."
-  },
-  "restoredMessage": {
-    "message": "Une copie est ouverte pour modification. L’envoi original est suspendu ; annulez-le si vous programmez cette nouvelle copie."
+    "message": "Annuler tous les envois futurs et conserver le message comme brouillon ordinaire ? Les messages déjà envoyés ne peuvent pas être rappelés."
   },
   "notificationReview": {
-    "message": "Un message programmé nécessite votre attention. Ouvrez les messages programmés pour le vérifier."
+    "message": "Un brouillon programmé nécessite votre attention. Ouvrez les brouillons pour le vérifier."
   },
   "errorDate": {
     "message": "Choisissez une date et une heure locales valides. Les heures sautées au passage à l’heure d’été sont indisponibles."
@@ -240,13 +234,13 @@
     "message": "Aucun créneau d’envoi ne correspond à ces conditions."
   },
   "errorStorage": {
-    "message": "Le message programmé n’a pas pu être stocké. Vérifiez l’espace disque disponible."
+    "message": "Le brouillon programmé n’a pas pu être enregistré. Vérifiez votre connexion, l’espace du compte de messagerie et l’espace disque disponible."
   },
   "errorInterrupted": {
     "message": "Thunderbird s’est arrêté pendant l’envoi. Vérifiez votre dossier Envoyés avant de réessayer pour éviter un doublon."
   },
   "errorMissingMessage": {
-    "message": "Le message stocké est indisponible. Annulez cet envoi et rédigez à nouveau le message."
+    "message": "Le brouillon programmé est indisponible. Vérifiez le dossier Brouillons de votre compte."
   },
   "errorDelivery": {
     "message": "L’envoi n’a pas pu être confirmé. Vérifiez votre dossier Envoyés, votre connexion et les paramètres du compte avant de réessayer."
@@ -294,7 +288,7 @@
     "message": "Le message a été envoyé, mais sa copie dans le dossier Envoyés n’a pas pu être enregistrée. Ne le renvoyez pas."
   },
   "errorOffline": {
-    "message": "Thunderbird est hors connexion. Ce message attendra le rétablissement de la connexion."
+    "message": "Le serveur de messagerie est indisponible. Connectez-vous avant d’enregistrer une nouvelle programmation. Les messages déjà programmés attendront."
   },
   "errorUnexpected": {
     "message": "L’opération n’a pas pu être effectuée. Vérifiez les envois programmés et réessayez."
@@ -302,22 +296,28 @@
   "errorDisconnected": {
     "message": "Le module a été rechargé. Fermez puis rouvrez cette page pour vous reconnecter."
   },
-  "queueFolder": {
-    "message": "Envois programmés"
-  },
   "manageSchedule": {
     "message": "Gérer la programmation"
   },
   "selectScheduledMessage": {
-    "message": "Sélectionnez un message dans le dossier Envois programmés pour gérer sa programmation."
+    "message": "Sélectionnez un message programmé en surbrillance dans le dossier Brouillons de votre compte."
   },
   "inactiveMessage": {
-    "message": "Cette copie n’a aucune programmation active. Déplacer un message dans ce dossier ne programme pas son envoi."
+    "message": "Ce brouillon n’a pas de programmation sur cette instance de Thunderbird."
   },
   "folderNote": {
-    "message": "Déplacer ou supprimer ce message annule les envois futurs. Un envoi déjà en cours ne peut pas être rappelé."
+    "message": "Modifier un brouillon programmé annule sa programmation. Programmez-le à nouveau une fois vos modifications terminées."
   },
   "errorQueueRemoved": {
-    "message": "Le message a été déplacé ou supprimé du dossier Envois programmés. Sa programmation a été annulée."
+    "message": "Ce brouillon a été modifié, déplacé ou supprimé. Sa programmation a été annulée."
+  },
+  "editDraft": {
+    "message": "Modifier le brouillon"
+  },
+  "errorServerDrafts": {
+    "message": "Choisissez un dossier Brouillons sur votre compte IMAP dans Paramètres des comptes → Copies et dossiers avant de programmer. Les dossiers locaux ne synchronisent pas vos brouillons."
+  },
+  "errorDraftMigration": {
+    "message": "Une ancienne programmation n’a pas pu être transférée vers les brouillons du serveur. Elle est suspendue et son contenu d’origine est conservé. Vérifiez les paramètres des brouillons IMAP et la connexion, puis rechargez le module."
   }
 }

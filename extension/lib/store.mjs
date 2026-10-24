@@ -1,5 +1,5 @@
-// Metadata and complete message snapshots share one database transaction.
-// Files/Blobs are structured-cloned by IndexedDB, never stored as transient URLs.
+// Local delivery journal. The payload store remains available for migration of
+// older releases; new messages live in server Drafts through DraftStore.
 export class ScheduleStore {
   constructor(indexedDB = globalThis.indexedDB) { this.indexedDB = indexedDB; }
   async open() {

@@ -1,9 +1,9 @@
 import { Scheduler } from "../lib/engine.mjs";
-import { FolderStore, nativePayload } from "../lib/folder-store.mjs";
+import { DraftStore } from "../lib/draft-store.mjs";
 import { localZone, ScheduleError } from "../lib/schedule.mjs";
 
 const api = messenger;
-const store = new FolderStore(api.scheduleBridge);
+const store = new DraftStore(api.scheduleBridge);
 const captures = new Set();
 const ports = new Set();
 const notified = new Set();
@@ -25,7 +25,7 @@ async function changed() {
     for (const port of ports) {
       try { port.postMessage({ type: "changed" }); } catch { ports.delete(port); }
     }
-    for (const job of jobs.filter(j => j.status === "review" || j.error === "errorTimeZone")) {
+    for (const job of jobs.filter(j => j.status === "review" || j.error === "errorTimeZone" || j.error === "errorDraftMigration")) {
       const key = `${job.id}:${job.attemptedAt}:${job.error}`;
       if (notified.has(key)) continue;
       notified.add(key);
@@ -38,10 +38,10 @@ async function changed() {
 }
 
 const scheduler = new Scheduler({ store, changed,
-  isPresent: job => api.scheduleBridge.hasQueued(job.id),
+  isPresent: job => job.draft ? api.scheduleBridge.hasDraft(job, true) : true,
   online: async () => navigator.onLine && await api.scheduleBridge.isOnline(),
   deliver: async (payload, job) => {
-    try { return await api.scheduleBridge.deliver(await nativePayload(payload), job.id); }
+    try { return await api.scheduleBridge.deliver(await store.get(job.id)); }
     catch (error) {
       for (const code of ["errorOffline", "errorQueueRemoved"]) if (error.message.includes(code)) error.code = code;
       throw error;
@@ -87,16 +87,28 @@ async function schedule(tabId, rule) {
   }
 }
 
-async function openQueue() {
+async function openQueue(message = {}) {
   await ready;
-  const folder = await api.scheduleBridge.queueFolder();
+  let identityId = message.id ? (await store.get(message.id))?.identityId : undefined;
+  if (message.tabId) identityId = (await api.compose.getComposeDetails(message.tabId)).identityId;
+  if (!identityId) {
+    const [tab] = await api.mailTabs.query({ active: true, currentWindow: true });
+    if (tab?.displayedFolder) identityId = (await api.accounts.get(tab.displayedFolder.accountId)).identities[0]?.id;
+  }
+  const folder = await api.scheduleBridge.draftsFolder(identityId || null);
   const existing = (await api.mailTabs.query({})).find(tab => tab.displayedFolder?.id === folder.id);
   if (existing) await api.tabs.update(existing.id, { active: true });
   else await api.mailTabs.create({ displayedFolder: folder.id, sortType: "date", sortOrder: "ascending" });
 }
 
 const ready = (async () => {
-  await api.scheduleBridge.start();
+  let { instanceId } = await api.storage.local.get("instanceId");
+  if (!instanceId) {
+    instanceId = crypto.randomUUID();
+    await api.storage.local.set({ instanceId });
+  }
+  store.owner = instanceId;
+  await api.scheduleBridge.start(instanceId);
   await store.open();
   await store.migrate();
   await scheduler.initialize();
@@ -124,19 +136,19 @@ api.runtime.onMessage.addListener(async (message, sender) => {
         return { ok: true, job: id ? await store.get(id) : null,
           online: navigator.onLine && await api.scheduleBridge.isOnline(), timeZone: localZone() };
       }
+      case "job": return { ok: true, job: await store.get(message.id),
+        online: navigator.onLine && await api.scheduleBridge.isOnline(), timeZone: localZone() };
       case "act": return { ok: true, job: await scheduler.act(message.id, message.action, message.options) };
-      case "queue": await openQueue(); return { ok: true };
-      case "restore": {
-        // Pause BEFORE opening a copy, so editing can never race a due delivery.
-        const job = await store.get(message.id);
-        if (job?.status === "pending") await scheduler.act(job.id, "pause");
-        else if (!["paused", "review"].includes(job?.status)) throw new ScheduleError("errorAction");
-        const payload = await store.payload(message.id);
-        if (!payload) throw new ScheduleError("errorMissingMessage");
-        const details = { ...payload.details };
-        for (const key of ["type", "isModified", "selectedEncryptionTechnology"]) delete details[key];
-        details.attachments = payload.attachments.map(a => ({ file: a.file, name: a.name }));
-        await api.compose.beginNew(details);
+      case "queue": await openQueue(message); return { ok: true };
+      case "edit": {
+        let job = await store.get(message.id);
+        if (!["pending", "paused", "review"].includes(job?.status)) throw new ScheduleError("errorAction");
+        // Stop pending delivery before waiting for the native editor to open.
+        if (job.status === "pending") {
+          await scheduler.act(job.id, "pause");
+          job = await store.get(job.id);
+        }
+        await api.scheduleBridge.editDraft(job);
         return { ok: true };
       }
       default: throw new ScheduleError("errorAction");
@@ -151,8 +163,8 @@ api.runtime.onMessage.addListener(async (message, sender) => {
 const tick = () => ready.then(() => scheduler.tick()).catch(error => console.error("Scheduled Send queue check failed", error));
 api.alarms.onAlarm.addListener(alarm => { if (["heartbeat", "next-send"].includes(alarm.name)) void tick(); });
 window.addEventListener("online", tick);
-api.browserAction.onClicked.addListener(openQueue);
-api.notifications.onClicked.addListener(openQueue);
+api.browserAction.onClicked.addListener(() => void openQueue().catch(console.error));
+api.notifications.onClicked.addListener(() => void openQueue().catch(console.error));
 api.scheduleBridge.onQueueChanged.addListener(ids => {
   // Capture removal intent even if Thunderbird immediately undoes a move.
   void ready.then(async () => {

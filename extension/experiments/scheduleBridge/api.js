@@ -5,10 +5,13 @@
 var { ExtensionError } = ChromeUtils.importESModule("resource://gre/modules/ExtensionUtils.sys.mjs");
 var { ExtensionCommon } = ChromeUtils.importESModule("resource://gre/modules/ExtensionCommon.sys.mjs");
 var { ExtensionSupport } = ChromeUtils.importESModule("resource:///modules/ExtensionSupport.sys.mjs");
+var { MailUtils } = ChromeUtils.importESModule("resource:///modules/MailUtils.sys.mjs");
+var { MsgHdrProcessor } = ChromeUtils.importESModule("resource:///modules/ExtensionMessages.sys.mjs");
 var { MailServices } = ChromeUtils.importESModule("resource:///modules/MailServices.sys.mjs");
 var { NetUtil } = ChromeUtils.importESModule("resource://gre/modules/NetUtil.sys.mjs");
 var { MessageSend } = ChromeUtils.importESModule("resource:///modules/MessageSend.sys.mjs");
 var { XPCOMUtils } = ChromeUtils.importESModule("resource://gre/modules/XPCOMUtils.sys.mjs");
+var { setTimeout, clearTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
 XPCOMUtils.defineLazyGlobalGetters(this, ["DOMParser"]);
 
 var COMPOSE_URL = "chrome://messenger/content/messengercompose/messengercompose.xhtml";
@@ -76,43 +79,19 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
       if (!window?.gMsgCompose || window.closed) throw new ExtensionError("errorCompose");
       return window;
     };
-    const queueMessageID = id => {
-      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)) throw new ExtensionError("errorAction");
-      return `scheduled-send-${id}@scheduled-send.local`;
-    };
-    const ownedFolder = create => {
-      let server;
-      try { server = MailServices.accounts.localFoldersServer; } catch { /* No local account yet. */ }
-      if (!server && create) {
-        MailServices.accounts.createLocalMailAccount();
-        server = MailServices.accounts.localFoldersServer;
-      }
-      if (!server) return null;
-      const root = server.rootFolder;
-      const find = folder => {
-        for (const child of folder.subFolders) {
-          // Deleting the queue folder moves it under Trash. Never discover it
-          // there and accidentally reactivate messages the user has deleted.
-          if (child.flags & Ci.nsMsgFolderFlags.Trash) continue;
-          if (child.getStringProperty("scheduledSendOwner") === context.extension.id) return child;
-          const nested = find(child);
-          if (nested) return nested;
-        }
-        return null;
-      };
-      const existing = find(root);
-      if (existing || !create) return existing;
-      const label = context.extension.localeData.localizeMessage("queueFolder");
-      let name = label, suffix = 2;
-      while (root.containsChildNamed(name)) name = `${label} (${suffix++})`;
-      root.createSubfolder(name, null);
-      const folder = root.getChildNamed(name);
-      folder.setStringProperty("scheduledSendOwner", context.extension.id);
-      return folder;
-    };
-    const findQueued = id => ownedFolder(false)?.msgDatabase.getMsgHdrForMessageID(queueMessageID(id)) || null;
-    const processMessage = async (payload, stagedJob = null, sendId = null) => {
-      if (!stagedJob && Services.io.offline) throw new ExtensionError("errorOffline");
+    const scope = { MailServices, MailUtils, MsgHdrProcessor, ExtensionError, MessageSend,
+      IOUtils, PathUtils, Services, ChromeUtils, Components, Cc, Ci, fileAt, console, setTimeout, clearTimeout };
+    this.resourceAlias = `${ExtensionCommon.makeWidgetId(context.extension.id)}-helpers`;
+    this.resources = Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler);
+    this.resources.setSubstitution(this.resourceAlias, context.extension.rootURI);
+    for (const file of ["draft-mime.js", "drafts.js"]) {
+      Services.scriptloader.loadSubScript(`resource://${this.resourceAlias}/experiments/scheduleBridge/${file}`, scope);
+    }
+    const mime = scope.DraftMime;
+    const mailbox = this.mailbox = new scope.DraftMailbox(context);
+    const queueMessageID = id => `scheduled-send-${id}@scheduled-send.invalid`;
+    const stageMessage = async (payload, job) => {
+      if (Services.io.offline) throw new ExtensionError("errorOffline");
       const { details, native, attachments } = payload;
       if (details.selectedEncryptionTechnology?.encryptBody || details.selectedEncryptionTechnology?.signMessage || details.attachPublicPGPKey) {
         throw new ExtensionError("errorEncryption");
@@ -124,8 +103,6 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
       if (native.newsgroups) throw new ExtensionError("errorNewsgroups");
       const directory = PathUtils.join(PathUtils.tempDir, `scheduled-send-${Services.uuid.generateUUID().toString().slice(1, -1)}`);
       await IOUtils.makeDirectory(directory, { permissions: 0o700 });
-      let accepted = false;
-      let messageId = null;
       let messageFile = null;
       const compose = Cc["@mozilla.org/messengercompose/compose;1"].createInstance(Ci.nsIMsgCompose);
       const listener = {
@@ -133,10 +110,9 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
         onStartSending() {}, onProgress() {}, onStatus() {}, onGetDraftFolderURI() {},
         onSendNotPerformed() {}, onTransportSecurityError() {},
         onStartCopy() {}, onStopCopy() {}, setMessageKey() {},
-        getMessageId() { return messageId || ""; },
+        getMessageId() { return queueMessageID(job.id); },
         onStopSending(id, status, message, file) {
-          if (stagedJob) { messageFile = file; return; }
-          if (Components.isSuccessCode(status)) { accepted = true; messageId = id; }
+          if (Components.isSuccessCode(status)) messageFile = file;
         }
       };
       try {
@@ -183,44 +159,31 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           card.url = `data:text/vcard;charset=utf-8,${identity.escapedVCard}`;
           fields.addAttachment(card);
         }
-        if (!stagedJob && Services.io.offline) throw new ExtensionError("errorOffline");
+        if (Services.io.offline) throw new ExtensionError("errorOffline");
         // MessageSend accepts a detached editor adapter. Its native MIME
         // builder then collects data images into multipart/related and
         // rewrites the HTML CIDs together, without opening a compose window.
         const document = details.isPlainText ? null : new DOMParser().parseFromString(details.body, "text/html");
         const editor = document ? { document, outputToString: () => document.documentElement.outerHTML } : null;
-        if (stagedJob) {
-          fields.messageId = `<${queueMessageID(stagedJob.id)}>`;
-          fields.setRawHeader("Date", new Date(stagedJob.nextAt || stagedJob.createdAt).toUTCString());
-        } else if (sendId && !findQueued(sendId)) {
-          throw new ExtensionError("errorQueueRemoved");
-        }
+        fields.messageId = `<${queueMessageID(job.id)}>`;
+        fields.setRawHeader("Date", new Date(job.nextAt || job.createdAt).toUTCString());
         await new MessageSend().createAndSendMessage(
-          editor, identity, account.key, fields, false, Boolean(stagedJob),
-          stagedJob ? Ci.nsIMsgSend.nsMsgSaveAsDraft : Ci.nsIMsgSend.nsMsgDeliverNow, null,
+          editor, identity, account.key, fields, false, true,
+          Ci.nsIMsgSend.nsMsgSaveAsDraft, null,
           details.isPlainText ? "text/plain" : "text/html", fields.body,
           null, null, listener, null, null, Ci.nsIMsgCompType.New
         );
-        if (stagedJob) {
-          if (!messageFile) throw new ExtensionError("errorStorage");
-          await new Promise((resolve, reject) => {
-            MailServices.copy.copyFileMessage(messageFile, ownedFolder(true), null, false,
-              Ci.nsMsgMessageFlags.Read, `scheduledsend-${stagedJob.status}`, {
-                QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
-                onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
-                onStopCopy(status) {
-                  if (Components.isSuccessCode(status)) resolve();
-                  else reject(new ExtensionError("errorStorage"));
-                }
-              }, null);
-          });
-          if (!findQueued(stagedJob.id)) throw new ExtensionError("errorStorage");
+        if (!messageFile) throw new ExtensionError("errorStorage");
+        const bytes = await IOUtils.read(messageFile.path);
+        let raw = "";
+        for (let offset = 0; offset < bytes.length; offset += 32768) {
+          raw += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
         }
-        return { messageId };
+        const draftId = queueMessageID(job.id);
+        raw = mime.rewrite(raw, { job, messageId: draftId, date: job.nextAt });
+        return mailbox.append(job, raw, draftId, mime.token(job));
       } catch (error) {
-        // An FCC failure after SMTP accepted the message is not a failed send.
-        if (accepted) return { messageId, warning: "errorSentCopy" };
-        console.error("Scheduled Send native delivery failed", error);
+        console.error("Scheduled Send draft creation failed", error);
         throw new ExtensionError(error.message || String(error));
       } finally {
         if (messageFile) await IOUtils.remove(messageFile.path).catch(console.error);
@@ -229,10 +192,10 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
     };
     return {
       scheduleBridge: {
-        start: async () => {
+        start: async owner => {
           if (this.started) return;
           this.started = true;
-          ownedFolder(true);
+          mailbox.start(owner);
           for (const [status, color] of Object.entries({pending: "#1373d9", paused: "#777777", review: "#b45309", sending: "#1373d9", sent: "#238636", cancelled: "#777777"})) {
             MailServices.tags.addTagForKey(`scheduledsend-${status}`, context.extension.localeData.localizeMessage(`status_${status}`), color, "");
           }
@@ -240,6 +203,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           ExtensionSupport.registerWindowListener(this.listenerId, {
             chromeURLs: [COMPOSE_URL],
             onLoadWindow: window => {
+              mailbox.onCompose(window);
               const record = {};
               const position = () => {
                 const send = window.document.getElementById("button-send");
@@ -299,7 +263,9 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           if (!this.locked.delete(window)) return;
           window.ToggleWindowLock(false);
           if (close) {
-            // Called only AFTER the complete snapshot and schedule commit.
+            // The server draft and local delivery journal are both committed.
+            // Replace an existing/auto-saved ordinary draft, as Thunderbird does.
+            if (window.gMsgCompose.compFields.draftId) window.RemoveDraft();
             window.gContentChanged = false;
             window.gMsgCompose.bodyModified = false;
             window.gReceiptOptionChanged = false;
@@ -307,66 +273,60 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
             window.close();
           }
         },
-        deliver: async (payload, id) => processMessage(payload, null, id),
+        deliver: async job => mailbox.deliver(job),
         stage: async (job, payload) => {
-          queueMessageID(job.id);
-          ownedFolder(true);
-          if (!findQueued(job.id)) await processMessage(payload, job);
+          if (job.owner !== mailbox.owner) throw new ExtensionError("errorAction");
+          mailbox.folder(job.identityId);
+          const draft = await stageMessage(payload, job);
+          mailbox.watch({ ...job, draft });
+          return draft;
         },
-        hasQueued: async id => Boolean(findQueued(id)),
-        queueFolder: async () => context.extension.folderManager.convert(ownedFolder(true)),
+        hasDraft: async (job, refresh) => mailbox.has(job, refresh),
+        watchDraft: async job => mailbox.watch(job),
+        draftsFolder: async identityId => {
+          const id = identityId || MailServices.accounts.defaultAccount?.defaultIdentity?.key;
+          return context.extension.folderManager.convert(mailbox.folder(id));
+        },
         queuedId: async messageId => {
           const header = context.extension.messageManager.get(messageId);
-          if (!header || header.folder?.URI !== ownedFolder(false)?.URI) return null;
-          return /^scheduled-send-([0-9a-f-]{36})@scheduled-send\.local$/.exec(header.messageId)?.[1] || null;
+          return mailbox.jobForHeader(header)?.id || null;
         },
-        updateQueued: async job => {
-          const header = findQueued(job.id);
-          if (!header) return;
-          const key = `scheduledsend-${job.status}`;
-          const old = header.getStringProperty("keywords").split(" ").filter(k => k.startsWith("scheduledsend-") && k !== key);
-          if (old.length) header.folder.removeKeywordsFromMessages([header], old.join(" "));
-          if (!header.getStringProperty("keywords").split(" ").includes(key)) header.folder.addKeywordsToMessages([header], key);
-          if (job.nextAt) header.date = job.nextAt * 1000;
+        updateDraft: async job => mailbox.update(job),
+        removeDraft: async job => mailbox.remove(job),
+        cancelDraft: async job => mailbox.cancel(job),
+        editDraft: async job => {
+          const current = await mailbox.read(job);
+          if (!current) throw new ExtensionError("errorQueueRemoved");
+          MailServices.compose.OpenComposeWindow(null, current.header, current.header.folder.getUriForMsg(current.header),
+            Ci.nsIMsgCompType.Draft, Ci.nsIMsgCompFormat.Default, MailServices.accounts.getIdentity(job.identityId), null, null);
         },
-        removeQueued: async (id, permanent) => {
-          const header = findQueued(id);
-          if (!header) return;
-          await new Promise((resolve, reject) => header.folder.deleteMessages([header], null, permanent, false, {
-            QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
-            onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
-            onStopCopy(status) {
-              if (Components.isSuccessCode(status)) resolve();
-              else reject(new ExtensionError("errorStorage"));
+        removeLegacy: async id => {
+          const root = MailServices.accounts.localFoldersServer?.rootFolder;
+          const walk = folder => {
+            for (const child of folder.subFolders) {
+              if (child.getStringProperty("scheduledSendOwner") === context.extension.id) {
+                const header = child.msgDatabase.getMsgHdrForMessageID(`scheduled-send-${id}@scheduled-send.local`);
+                if (header) child.deleteMessages([header], null, true, false, null, false);
+              }
+              walk(child);
             }
-          }, false));
+          };
+          if (root) walk(root);
         },
         onQueueChanged: new ExtensionCommon.EventManager({
           context, name: "scheduleBridge.onQueueChanged",
           register: fire => {
-            const notify = headers => {
-              const ids = [...headers]
-                .filter(h => h.folder?.getStringProperty("scheduledSendOwner") === context.extension.id)
-                .map(h => /^scheduled-send-([0-9a-f-]{36})@scheduled-send\.local$/.exec(h.messageId)?.[1]).filter(Boolean);
-              if (ids.length) fire.async(ids);
-            };
-            const listener = {
-              msgsDeleted: notify,
-              msgsMoveCopyCompleted: (move, headers) => { if (move) notify(headers); },
-              folderDeleted: folder => {
-                if (folder.getStringProperty("scheduledSendOwner") !== context.extension.id) return;
-                try { notify(folder.messages); } catch { /* Deleted database: reconcile missing copies. */ }
-                fire.async([]);
-              }
-            };
-            MailServices.mfn.addListener(listener, MailServices.mfn.msgsDeleted | MailServices.mfn.msgsMoveCopyCompleted | MailServices.mfn.folderDeleted);
-            return () => MailServices.mfn.removeListener(listener);
+            const listener = ids => fire.async(ids);
+            mailbox.listeners.add(listener);
+            return () => mailbox.listeners.delete(listener);
           }
         }).api()
       }
     };
   }
   onShutdown() {
+    this.mailbox?.stop();
+    if (this.resourceAlias) this.resources.setSubstitution(this.resourceAlias, null);
     if (this.started) ExtensionSupport.unregisterWindowListener(this.listenerId);
     for (const [window, record] of this.windows || []) {
       record.observer.disconnect();
