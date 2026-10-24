@@ -8,9 +8,6 @@
   "scheduleSend": {
     "message": "Programmer l’envoi"
   },
-  "popupSubtitle": {
-    "message": "Votre message, au bon moment."
-  },
   "queueTitle": {
     "message": "Programmés"
   },

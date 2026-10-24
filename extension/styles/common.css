@@ -80,7 +80,6 @@ summary { cursor: pointer; font-weight: 500; padding: 2px 0; }
 .error { color: var(--danger); font-size: 12px; line-height: 1.5; }
 .error:empty { display: none; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.brand-icon { width: 30px; height: 30px; color: var(--accent); flex: none; }
 dialog { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 22px; box-shadow: 0 12px 50px #0003; }
 dialog::backdrop { background: #0006; }
 dialog h2 { margin-bottom: 16px; }
