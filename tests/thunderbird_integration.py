@@ -89,6 +89,26 @@ def wait_ui(client, path, expression):
     raise AssertionError(f"UI did not become ready: {expression}")
 
 
+def finish_edited_draft(client, choice, action="close"):
+    client.script("""
+      globalThis.editedCompose = Services.wm.getMostRecentWindow('msgcompose');
+      editedCompose.setTimeout(() => {
+        if (arguments[0] === 'save') void editedCompose.SaveAsDraft();
+        else editedCompose.ComposeCanClose();
+      }, 0);
+    """, action)
+    client.wait("""
+      globalThis.schedulePrompt = [...Services.wm.getEnumerator(null)].find(w => w.document.documentURI.includes('commonDialog'));
+      return schedulePrompt?.document.querySelector('dialog')?.getButton('accept');
+    """)
+    assert client.script("return schedulePrompt.document.getElementById('infoBody').textContent;").startswith(MESSAGES["keepScheduleDescription"]["message"].split("$1")[0])
+    screenshot(client, "keep-schedule.png")
+    client.script("""
+      const button = arguments[0] === 0 ? 'accept' : arguments[0] === 1 ? 'cancel' : 'extra1';
+      schedulePrompt.document.querySelector('dialog').getButton(button).click();
+    """, choice)
+
+
 def queue(client):
     client.background(f"return {API}.tabs.create({{url: {API}.runtime.getURL('{QUEUE}')}});")
     wait_page(client, QUEUE)
@@ -441,13 +461,48 @@ def run_tests(client, xpi, smtp, imap):
     assert len(ordinary) == 1 and ordinary[0]["X-Scheduled-Send"] is None
     assert "scheduled world" in ordinary[0].get_body(preferencelist=("html",)).get_content()
     assert any(p.get_content_type() == "image/gif" for p in ordinary[0].walk())
-    client.script("""
-      const copy = Services.wm.getMostRecentWindow('msgcompose');
-      copy.gContentChanged = false; copy.gMsgCompose.bodyModified = false;
-      copy.close();
-      Services.wm.getMostRecentWindow('mail:3pane').focus();
+    client.async_script("""
+      globalThis.editedCompose = Services.wm.getMostRecentWindow('msgcompose');
+      editedCompose.document.getElementById('msgSubject').value = 'Edited recurring check';
+      editedCompose.gContentChanged = true;
+      await editedCompose.GenericSendMessage(Ci.nsIMsgCompDeliverMode.AutoSaveAsDraft);
     """)
-    print("PASS: Drafts controls, reschedule, pause/resume; opening the actual draft cancels its schedule", flush=True)
+    client.wait("return !editedCompose.gSaveOperationInProgress;")
+    assert client.script("return ![...Services.wm.getEnumerator(null)].some(w => w.document.documentURI.includes('commonDialog'));")
+    assert not queued_raw(imap, recurring["id"])
+    assert len(smtp.messages) == 2
+    finish_edited_draft(client, 1)
+    assert client.script("return !editedCompose.closed;")
+    assert not queued_raw(imap, recurring["id"])
+    previous_jobs = {j["id"] for j in request(client, {"type": "list"})["jobs"]}
+    finish_edited_draft(client, 0, "save")
+    client.wait("return editedCompose.closed;", timeout=25)
+    restored = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] not in previous_jobs)
+    assert restored["status"] == "pending" and restored["subject"] == "Edited recurring check", restored
+    assert restored["rule"] == edited["rule"] and restored["nextAt"] == edited["nextAt"]
+    assert queued_raw(imap, restored["id"])
+    # Open directly through Thunderbird as a normal Drafts double-click does.
+    client.script("""
+      const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+      const { MailUtils } = ChromeUtils.importESModule('resource:///modules/MailUtils.sys.mjs');
+      const folder = MailUtils.getExistingFolder(arguments[0]);
+      const header = folder.msgDatabase.getMsgHdrForMessageID(arguments[1]);
+      MailServices.compose.OpenComposeWindow(null, header, folder.getUriForMsg(header),
+        Ci.nsIMsgCompType.Draft, Ci.nsIMsgCompFormat.Default, MailServices.accounts.getIdentity('id1'), null, null);
+    """, restored["draft"]["folderURI"], restored["draft"]["messageId"])
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == restored["id"])
+        if state["status"] == "cancelled" and state.get("draftCleaned"):
+            break
+        time.sleep(.1)
+    finish_edited_draft(client, 2)
+    client.wait("return editedCompose.closed;", timeout=25)
+    assert not queued_raw(imap, restored["id"])
+    assert any(b'Subject: Edited recurring check' in m['raw'] and b'X-Scheduled-Send:' not in m['raw'] for m in imap.mailboxes['Drafts'])
+    assert len(smtp.messages) == 2
+    client.script("Services.wm.getMostRecentWindow('mail:3pane').focus();")
+    print("PASS: native save/close prompt, continue editing, restore schedule with edits, and save without a schedule", flush=True)
 
     # Other mail clients may discard custom headers. Never send a stale local
     # copy, nor claim a draft carrying another profile's scheduling identity.

@@ -306,7 +306,7 @@
     "message": "Ce brouillon n’a pas de programmation sur cette instance de Thunderbird."
   },
   "folderNote": {
-    "message": "Modifier un brouillon programmé annule sa programmation. Programmez-le à nouveau une fois vos modifications terminées."
+    "message": "La modification suspend l’envoi. À l’enregistrement ou à la fermeture du brouillon, vous pouvez conserver sa programmation précédente."
   },
   "errorQueueRemoved": {
     "message": "Ce brouillon a été modifié, déplacé ou supprimé. Sa programmation a été annulée."
@@ -319,5 +319,26 @@
   },
   "errorDraftMigration": {
     "message": "Une ancienne programmation n’a pas pu être transférée vers les brouillons du serveur. Elle est suspendue et son contenu d’origine est conservé. Vérifiez les paramètres des brouillons IMAP et la connexion, puis rechargez le module."
+  },
+  "keepScheduleTitle": {
+    "message": "Conserver la programmation précédente ?"
+  },
+  "keepScheduleDescription": {
+    "message": "Ce message était programmé pour le $1. Enregistrer vos modifications et fermer le brouillon avec sa programmation précédente, ou l’enregistrer sans programmation ?"
+  },
+  "keepScheduleLate": {
+    "message": "Cette heure est passée. Conserver la programmation permet l’envoi au prochain créneau autorisé, éventuellement immédiatement."
+  },
+  "keepScheduleState": {
+    "message": "La programmation précédente était « $1 » et restera dans cet état."
+  },
+  "saveKeepSchedule": {
+    "message": "Enregistrer et conserver"
+  },
+  "saveWithoutSchedule": {
+    "message": "Enregistrer sans programmation"
+  },
+  "continueEditing": {
+    "message": "Continuer la rédaction"
   }
 }

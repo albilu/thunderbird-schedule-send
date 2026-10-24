@@ -25,6 +25,53 @@ function fixture(deliver) {
     create: (extra = {}) => scheduler.create({ startAt: now + 60000, ...extra }, payload) };
 }
 
+test("restoring an edited draft keeps its time and recurrence but uses edited content", async () => {
+  const f = fixture();
+  const previous = await f.create({ recurrence: { unit: "monthly", interval: 2 } });
+  await f.scheduler.cancelRemoved([previous.id]);
+  const edited = { ...payload, details: { ...payload.details, subject: "edited", to: ["new@example.invalid"] } };
+  const restored = await f.scheduler.restoreEdited(previous, edited);
+  assert.notEqual(restored.id, previous.id);
+  assert.deepEqual(restored.rule, previous.rule);
+  assert.equal(restored.nextAt, previous.nextAt);
+  assert.equal(restored.occurrence, previous.occurrence);
+  assert.equal(restored.subject, "edited");
+  f.advance(60000);
+  await f.scheduler.tick();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].details.subject, "edited");
+  assert.equal((await f.store.get(previous.id)).status, "cancelled");
+});
+
+test("restoring an edited draft never resumes a paused or uncertain send automatically", async () => {
+  for (const status of ["paused", "review"]) {
+    const f = fixture();
+    const previous = { ...await f.create(), status, sentCount: 3, occurrence: 3, error: status === "review" ? "errorInterrupted" : null };
+    await f.store.put(previous);
+    await f.scheduler.cancelRemoved([previous.id]);
+    f.advance(120000);
+    const restored = await f.scheduler.restoreEdited(previous, payload);
+    assert.equal(restored.status, status);
+    assert.equal(restored.sentCount, 3);
+    assert.equal(restored.occurrence, 3);
+    assert.equal(restored.error, previous.error);
+    await f.scheduler.tick();
+    assert.equal(f.sent.length, 0);
+  }
+});
+
+test("restoring a late edited draft applies its delivery window and rejects timezone changes", async () => {
+  const f = fixture();
+  const previous = await f.create({ window: { start: "01:00", end: "02:00" } });
+  await f.scheduler.cancelRemoved([previous.id]);
+  f.advance(48 * 3600000);
+  const restored = await f.scheduler.restoreEdited(previous, payload);
+  assert(restored.nextAt > previous.nextAt);
+  assert.equal(new Date(restored.nextAt).getHours(), 1);
+  f.scheduler.zone = () => "different/timezone";
+  await assert.rejects(f.scheduler.restoreEdited(previous, payload), { code: "errorTimeZone" });
+});
+
 test("snapshot survives a new scheduler, sends once, then releases message bytes", async () => {
   const f = fixture();
   const job = await f.create();

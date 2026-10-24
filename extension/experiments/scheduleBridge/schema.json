@@ -188,6 +188,16 @@
             }
           }
         ]
+      },
+      {
+        "name": "onRestoreEdited",
+        "type": "function",
+        "parameters": [
+          {
+            "name": "details",
+            "type": "any"
+          }
+        ]
       }
     ]
   }

@@ -37,6 +37,26 @@ export class Scheduler {
       return job;
     });
   }
+  restoreEdited(previous, payload) {
+    return this.serial(async () => {
+      const source = await this.store.get(previous.id);
+      if (!source || source.status !== "cancelled" || !["pending", "paused", "review"].includes(previous.status)
+        || !Number.isFinite(previous.nextAt)) throw new ScheduleError("errorAction");
+      if (source.rule.timeZone !== this.zone()) throw new ScheduleError("errorTimeZone");
+      // Keep the recurrence anchor/counter and previous paused/review state.
+      // A new draft ID prevents an old, deleted IMAP copy being reused.
+      const job = { id: crypto.randomUUID(), rule: source.rule,
+        nextAt: nextAllowed(Math.max(this.clock(), previous.nextAt), source.rule),
+        occurrence: source.occurrence, status: previous.status,
+        createdAt: this.clock(), sentCount: source.sentCount,
+        lastSentAt: source.lastSentAt, error: source.error, detail: source.detail,
+        subject: payload.details.subject, to: payload.details.to,
+        from: payload.details.from, attachmentCount: payload.attachments.length };
+      await this.store.create(job, payload);
+      await this.changed();
+      return job;
+    });
+  }
   cancelRemoved(ids) {
     const removed = new Set(ids);
     // Make intent visible to an already-running tick before its next message.

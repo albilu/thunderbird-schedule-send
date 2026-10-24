@@ -49,7 +49,7 @@ const scheduler = new Scheduler({ store, changed,
   }
 });
 
-async function schedule(tabId, rule) {
+async function schedule(tabId, rule, previous = null) {
   if (!Number.isInteger(tabId) || captures.has(tabId)) throw new ScheduleError("errorComposeBusy");
   captures.add(tabId);
   let locked = false;
@@ -72,7 +72,8 @@ async function schedule(tabId, rule) {
       attachments.push({ file, name: attachment.name, type: file.type });
     }
     if (size > MAX_BYTES) throw new ScheduleError("errorTooLarge");
-    const job = await scheduler.create(rule, { details, native: extra.native, attachments });
+    const payload = { details, native: extra.native, attachments };
+    const job = previous ? await scheduler.restoreEdited(previous, payload) : await scheduler.create(rule, payload);
     committed = true;
     try { await api.scheduleBridge.release(tabId, true); }
     catch (error) {
@@ -143,12 +144,13 @@ api.runtime.onMessage.addListener(async (message, sender) => {
       case "edit": {
         let job = await store.get(message.id);
         if (!["pending", "paused", "review"].includes(job?.status)) throw new ScheduleError("errorAction");
+        const previousStatus = job.status;
         // Stop pending delivery before waiting for the native editor to open.
         if (job.status === "pending") {
           await scheduler.act(job.id, "pause");
           job = await store.get(job.id);
         }
-        await api.scheduleBridge.editDraft(job);
+        await api.scheduleBridge.editDraft({ ...job, previousStatus });
         return { ok: true };
       }
       default: throw new ScheduleError("errorAction");
@@ -171,6 +173,16 @@ api.scheduleBridge.onQueueChanged.addListener(ids => {
     await scheduler.cancelRemoved(ids);
     await scheduler.tick();
   }).catch(error => console.error("Scheduled Send folder reconciliation failed", error));
+});
+api.scheduleBridge.onRestoreEdited.addListener(async ({ tabId, previous }) => {
+  try {
+    await ready;
+    await schedule(tabId, null, previous);
+    return { ok: true };
+  } catch (error) {
+    console.error("Scheduled Send edit restoration failed", error);
+    return { ok: false, error: error.code || /\berror[A-Z]\w+/.exec(error.message)?.[0] || "errorUnexpected" };
+  }
 });
 const updateMessageAction = async (tab, message) => {
   try {

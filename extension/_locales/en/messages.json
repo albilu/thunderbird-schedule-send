@@ -306,7 +306,7 @@
     "message": "This draft has no schedule on this Thunderbird instance."
   },
   "folderNote": {
-    "message": "Editing a scheduled draft cancels its schedule. Schedule it again when your changes are ready."
+    "message": "Editing pauses delivery. When you save or close the draft, you can keep its previous schedule."
   },
   "errorQueueRemoved": {
     "message": "This draft was edited, moved or deleted. Its schedule has been cancelled."
@@ -319,5 +319,26 @@
   },
   "errorDraftMigration": {
     "message": "A previous schedule could not be moved to server Drafts. It is paused and its original contents are retained. Check your IMAP Drafts settings and connection, then reload the add-on."
+  },
+  "keepScheduleTitle": {
+    "message": "Keep the previous schedule?"
+  },
+  "keepScheduleDescription": {
+    "message": "This message was scheduled for $1. Save your edits and close the draft with its previous schedule, or save it without a schedule?"
+  },
+  "keepScheduleLate": {
+    "message": "That time has passed. Keeping the schedule allows delivery at the next permitted time, which may be immediately."
+  },
+  "keepScheduleState": {
+    "message": "The previous schedule was “$1” and will remain in that state."
+  },
+  "saveKeepSchedule": {
+    "message": "Save and keep schedule"
+  },
+  "saveWithoutSchedule": {
+    "message": "Save without schedule"
+  },
+  "continueEditing": {
+    "message": "Continue editing"
   }
 }

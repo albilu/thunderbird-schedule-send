@@ -84,7 +84,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
     this.resourceAlias = `${ExtensionCommon.makeWidgetId(context.extension.id)}-helpers`;
     this.resources = Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler);
     this.resources.setSubstitution(this.resourceAlias, context.extension.rootURI);
-    for (const file of ["draft-mime.js", "drafts.js"]) {
+    for (const file of ["draft-mime.js", "draft-editor.js", "drafts.js"]) {
       Services.scriptloader.loadSubScript(`resource://${this.resourceAlias}/experiments/scheduleBridge/${file}`, scope);
     }
     const mime = scope.DraftMime;
@@ -297,6 +297,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
         editDraft: async job => {
           const current = await mailbox.read(job);
           if (!current) throw new ExtensionError("errorQueueRemoved");
+          mailbox.editIntents.set(job.id, { ...job, status: job.previousStatus || job.status });
           MailServices.compose.OpenComposeWindow(null, current.header, current.header.folder.getUriForMsg(current.header),
             Ci.nsIMsgCompType.Draft, Ci.nsIMsgCompFormat.Default, MailServices.accounts.getIdentity(job.identityId), null, null);
         },
@@ -313,6 +314,13 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           };
           if (root) walk(root);
         },
+        onRestoreEdited: new ExtensionCommon.EventManager({
+          context, name: "scheduleBridge.onRestoreEdited",
+          register: fire => {
+            mailbox.restoreEditor = details => fire.async(details);
+            return () => { mailbox.restoreEditor = null; };
+          }
+        }).api(),
         onQueueChanged: new ExtensionCommon.EventManager({
           context, name: "scheduleBridge.onQueueChanged",
           register: fire => {

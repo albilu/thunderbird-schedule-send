@@ -4,6 +4,7 @@ var DraftMailbox = class {
     this.context = context;
     this.jobs = new Map();
     this.editing = new Map();
+    this.editIntents = new Map();
     this.internalDeletes = new Set();
     this.listeners = new Set();
   }
@@ -27,7 +28,12 @@ var DraftMailbox = class {
     MailServices.mfn.addListener(this.observer,
       MailServices.mfn.msgsDeleted | MailServices.mfn.msgsMoveCopyCompleted | MailServices.mfn.folderDeleted);
   }
-  stop() { if (this.observer) MailServices.mfn.removeListener(this.observer); this.listeners.clear(); }
+  stop() {
+    if (this.observer) MailServices.mfn.removeListener(this.observer);
+    for (const editor of this.editing.values()) editor.dispose();
+    this.listeners.clear();
+    this.editIntents.clear();
+  }
   emit(ids) { for (const listener of this.listeners) listener(ids); }
   jobForHeader(header) {
     const job = header && this.jobs.get(header.messageId);
@@ -186,8 +192,10 @@ var DraftMailbox = class {
         const native = Cc["@mozilla.org/messenger;1"].createInstance(Ci.nsIMessenger);
         const header = native.msgHdrFromURI(uri);
         const job = this.jobForHeader(header);
-        if (!job || this.editing.has(job.id)) return;
-        this.editing.set(job.id, window);
+        if (!job || !["pending", "paused", "review"].includes(job.status) || this.editing.has(job.id)) return;
+        const previous = this.editIntents.get(job.id) || job;
+        this.editIntents.delete(job.id);
+        this.editing.set(job.id, new DraftEditor(this, window, previous));
         // Immediately block delivery; the background commits the cancellation.
         this.emit([job.id]);
       } catch (error) { console.error("Scheduled Send draft editing detection failed", error); }
@@ -196,35 +204,18 @@ var DraftMailbox = class {
     if (window.composeEditorReady) detect();
   }
   async cancel(job) {
-    const window = this.editing.get(job.id);
-    if (window && !window.closed) {
-      for (const name of window.gMsgCompose.compFields.headerNames) {
-        if (/^x-scheduled-send(?:-|$)/i.test(name)) window.gMsgCompose.compFields.deleteHeader(name);
-      }
+    const editor = this.editing.get(job.id);
+    if (editor && !editor.window.closed) {
       this.internalDeletes.add(job.draft.messageId);
-      // Native draft saving preserves the user's editable composition and its
-      // draft association. It also synchronizes removal of the schedule header.
-      const saved = Promise.withResolvers();
-      const listener = {
-        NotifyComposeFieldsReady() {}, NotifyComposeBodyReady() {},
-        ComposeProcessDone(status) { if (!Components.isSuccessCode(status)) saved.reject(new ExtensionError("errorStorage")); },
-        SaveInFolderDone() { saved.resolve(); }
-      };
-      window.gMsgCompose.RegisterStateListener(listener);
-      const timeout = setTimeout(() => saved.reject(new ExtensionError("errorStorage")), 20000);
       try {
-        await Promise.all([window.SaveAsDraft(), saved.promise]);
-      } finally {
-        clearTimeout(timeout);
-        if (!window.closed) window.gMsgCompose.UnregisterStateListener(listener);
-      }
-      if (!Services.io.offline) {
-        await this.refresh(this.folder(job.identityId, job.draft.folderURI));
-        await this.remove(job);
-      }
-      this.jobs.delete(job.draft.messageId);
-      this.internalDeletes.delete(job.draft.messageId);
-      this.editing.delete(job.id);
+        await editor.saveOrdinary();
+        if (!Services.io.offline) {
+          await this.refresh(this.folder(job.identityId, job.draft.folderURI));
+          await this.remove(job);
+        }
+        this.jobs.delete(job.draft.messageId);
+        this.internalDeletes.delete(job.draft.messageId);
+      } finally { editor.initialized.resolve(); }
       return;
     }
     const current = await this.read(job, true, true);

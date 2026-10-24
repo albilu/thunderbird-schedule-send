@@ -22,7 +22,7 @@ Requires **Thunderbird 153 or later**. Build with Python 3:
 python3 scripts/package.py
 ```
 
-In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.3.0.xpi`.
+In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.3.1.xpi`.
 
 For development, use **Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on** and select `extension/manifest.json`.
 
@@ -36,11 +36,15 @@ For development, use **Tools → Developer Tools → Debug Add-ons → Load Temp
 
 Open your email account’s **Drafts** folder. Scheduled drafts have a colored **Scheduled** tag and their next delivery time in the Date field. Select one and click **Manage schedule** in its message header to pause, resume, reschedule, edit or cancel. The toolbar button and **Open Drafts** shortcut open the normal Drafts folder; there is no separate queue page or custom mail folder.
 
-Use **Edit draft**, or open the draft normally, to change its recipients, body or attachments. Opening it in this Thunderbird instance cancels its schedule and saves an ordinary draft; schedule it again when ready. **Cancel schedule** also keeps an ordinary editable draft. Moving or deleting the draft cancels future sends. A send already in progress cannot be recalled. One-time drafts are removed after successful delivery; recurring drafts remain, with an updated schedule.
+Use **Edit draft**, or open the draft normally, to change its recipients, body or attachments. Delivery stops while you edit. When you explicitly save or close the draft, a popup offers **Save and keep schedule**, **Save without schedule**, or **Continue editing**. Keeping the schedule saves the edited contents and closes the editor, preserving the original time, recurrence and delivery rules. Previously paused schedules stay paused; schedules needing review still need review. If the original time has passed, the popup explains that delivery can occur at the next permitted time, possibly immediately. Automatic draft saves do not restore delivery or open the popup.
+
+**Cancel schedule** keeps an ordinary editable draft. Moving or deleting the draft cancels future sends. A send already in progress cannot be recalled. One-time drafts are removed after successful delivery; recurring drafts remain, with an updated schedule. If Thunderbird or the add-on is restarted during editing, the saved draft stays unscheduled; schedule it again when ready.
 
 **Drafts must be stored on an IMAP server.** The extension uses the sender identity’s configured Drafts folder (Account Settings → Copies & Folders), including the provider’s normal Drafts folder. It does not create a separate folder or silently fall back to Local Folders. Scheduling requires a connection so the draft can be confirmed on the server before the compose window closes.
 
 The draft’s contents and schedule headers synchronize with the account. Other Thunderbird instances and webmail can access the draft, but **only the originating Thunderbird profile sends it**. There is no ownership-transfer feature. Delivery reads the current synchronized message, never the old private snapshot. If another mail client replaces the draft or removes its scheduling header, the original schedule stops; changes that preserve the draft’s identity and metadata are read from the current server copy. Webmail does not provide the add-on’s scheduling controls.
+
+Gmail documents that updating a draft replaces its underlying **Gmail message resource**, while the Gmail draft resource has a stable ID. Those API IDs are distinct from the RFC `Message-ID` header used here. Google's documentation does not establish whether the Gmail web editor preserves that header and `X-Scheduled-Send`. Live Gmail web-edit behavior remains unverified; see the [verification notes](docs/gmail-drafts.md).
 
 Existing local schedules are migrated to the sender’s server Drafts folder. The original contents are retained until the server copy is confirmed. If the account is offline or still configured for local drafts, migration pauses the schedule; correct the settings and reload the add-on to retry. Existing unrelated mail is untouched.
 
@@ -93,7 +97,7 @@ npm run test:thunderbird
 SCHEDULE_TEST_LOCALE=fr npm run test:thunderbird
 ```
 
-Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, native draft editing, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
+Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
 
 ## Architecture
 
