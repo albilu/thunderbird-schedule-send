@@ -2,11 +2,25 @@
   color-scheme: light dark;
   font: menu;
   font-size: 13px;
-  --surface: light-dark(#ffffff, #23222b);
-  --text: light-dark(#23222b, #f1f1f4);
-  --border: light-dark(#d8d8df, #53515e);
-  --accent: light-dark(#1373d9, #78b6ff);
-  --accent-text: light-dark(#ffffff, #142a46);
+  --surface: Canvas;
+  --text: CanvasText;
+  --border: ButtonBorder;
+  --field: Field;
+  --field-text: FieldText;
+  --field-border: ButtonBorder;
+  --field-focus: Field;
+  --field-focus-text: FieldText;
+  --field-focus-border: Highlight;
+  --button: ButtonFace;
+  --button-text: ButtonText;
+  --button-border: ButtonBorder;
+  --button-hover: color-mix(in srgb, ButtonFace, ButtonText 10%);
+  --button-active: color-mix(in srgb, ButtonFace, ButtonText 20%);
+  --accent: AccentColor;
+  --accent-text: AccentColorText;
+  --accent-hover: AccentColor;
+  --accent-active: AccentColor;
+  --focus: Highlight;
   --danger: light-dark(#b3261e, #ff9a91);
   background: var(--surface);
   color: var(--text);
@@ -17,15 +31,18 @@ body { margin: 0; }
 [hidden] { display: none !important; }
 button, input, select { font: inherit; color: inherit; }
 button, input, select, summary { outline-offset: 3px; }
-:focus-visible { outline: 2px solid var(--accent); }
-button { cursor: pointer; border: 1px solid var(--border); background: color-mix(in srgb, var(--surface), var(--text) 4%); border-radius: 5px; padding: 8px 12px; line-height: 1.2; }
-button:hover { background: color-mix(in srgb, var(--surface), var(--text) 9%); }
+:focus-visible { outline: 2px solid var(--focus); }
+button { cursor: pointer; border: 1px solid var(--button-border); background: var(--button); color: var(--button-text); border-radius: 5px; padding: 8px 12px; line-height: 1.2; }
+button:hover:enabled { background: var(--button-hover); }
+button:active:enabled { background: var(--button-active); }
 button:disabled { cursor: default; opacity: .55; }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
-button.primary:hover { filter: brightness(.96); }
-button.subtle { background: transparent; }
+button.primary:hover:enabled { background: var(--accent-hover); }
+button.primary:active:enabled { background: var(--accent-active); }
+button.subtle { background: transparent; color: var(--text); }
 button.danger { color: var(--danger); }
-input:not([type=checkbox]), select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 5px; padding: 8px 9px; background: var(--surface); }
+input:not([type=checkbox]), select { width: 100%; min-width: 0; border: 1px solid var(--field-border); border-radius: 5px; padding: 8px 9px; background: var(--field); color: var(--field-text); }
+input:not([type=checkbox]):focus, select:focus { border-color: var(--field-focus-border); background: var(--field-focus); color: var(--field-focus-text); }
 input[type=checkbox] { width: 16px; height: 16px; margin: 0; flex: none; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 20px; font-weight: 600; letter-spacing: -.3px; }
@@ -55,7 +72,7 @@ summary { cursor: pointer; font-weight: 500; padding: 2px 0; }
 .weekday input { position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
 .weekday span { display: block; padding: 8px 1px; text-align: center; font-size: 11px; border-radius: 4px; border: 1px solid var(--border); }
 .weekday input:checked + span { border-color: var(--accent); background: color-mix(in srgb, var(--surface), var(--accent) 9%); color: var(--accent); }
-.weekday input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.weekday input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
 .preview { display: grid; gap: 5px; border: 1px solid color-mix(in srgb, var(--surface), var(--accent) 28%); background: color-mix(in srgb, var(--surface), var(--accent) 5%); padding: 12px; border-radius: 6px; }
 .preview strong { font-weight: 600; font-size: 14px; }
 .preview.invalid { border-color: var(--border); background: transparent; }

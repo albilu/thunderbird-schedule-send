@@ -10,5 +10,5 @@ h1 { font-size: 19px; }
 .rules { margin-bottom: 12px; }
 #schedule-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .scroll-area { overflow-y: auto; min-height: 0; padding: 0 20px 4px; flex: 1; }
-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+footer { display: flex; flex: none; align-items: center; justify-content: flex-end; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--surface); }
 .error { margin-top: 10px; }

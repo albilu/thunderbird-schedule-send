@@ -19,7 +19,7 @@ Thunderbird has no built-in send-later. Because each scheduled message lives in 
 - **Safe editing** — editing a draft pauses delivery; on save/close you choose **Save and keep schedule**, **Save without schedule**, or **Continue editing**.
 - **Faithful messages** — attachments, HTML/plain text, embedded images, reply headers and Bcc recipients are preserved; up to 50 MB.
 - **Crash-safe delivery** — a `sending` marker plus **Needs review** state prevents silent duplicates after interruption; failed sends are never auto-retried.
-- **Native look and feel** — follows Thunderbird's light/dark theme.
+- **Native look and feel** — popups, fields and buttons follow Thunderbird's resolved colors, including light/dark themes, custom themes and accent changes, updating while open.
 - **English and French** — follows Thunderbird's interface language.
 
 ## Requirements

@@ -37,7 +37,4 @@ document.getElementById("schedule-form").addEventListener("submit", async event 
     form.update();
   }
 });
-document.getElementById("open-queue").addEventListener("click", async () => {
-  try { await request({ type: "queue", tabId }); window.close(); } catch (failure) { error.textContent = failure.message; }
-});
 window.addEventListener("unload", () => form.destroy());

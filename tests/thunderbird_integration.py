@@ -24,6 +24,7 @@ from urllib.parse import quote, unquote
 
 from marionette import Marionette
 from imap_fixture import IMAPServer
+from theme_checks import theme_tests
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCALE = os.environ.get("SCHEDULE_TEST_LOCALE", "en-US")
@@ -157,31 +158,6 @@ def modify_jobs(client, source):
       const store = new ScheduleStore();
       {source}
     """)
-
-
-def theme_tests(client):
-    themes = client.async_script("""
-      const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
-      return (await AddonManager.getAddonsByTypes(['theme'])).map(t => ({id: t.id, active: t.isActive}));
-    """)
-    original = next(theme['id'] for theme in themes if theme['active'])
-    backgrounds = []
-    try:
-        for scheme in ['light', 'dark']:
-            theme = next(t['id'] for t in themes if f'compact-{scheme}@' in t['id'])
-            client.async_script("""
-              const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
-              await (await AddonManager.getAddonByID(arguments[0])).enable();
-            """, theme)
-            time.sleep(.4)
-            backgrounds.append(client.page(QUEUE, "return getComputedStyle(document.documentElement).backgroundColor;"))
-        assert backgrounds[0] != backgrounds[1], backgrounds
-        print("PASS: UI follows Thunderbird light/dark theme changes", flush=True)
-    finally:
-        client.async_script("""
-          const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
-          await (await AddonManager.getAddonByID(arguments[0])).enable();
-        """, original)
 
 
 def queued_raw(imap, job_id):
@@ -338,7 +314,7 @@ def run_tests(client, xpi, smtp, imap):
     set_extension(client)
     assert queue(client)["jobs"] == []
     print("PASS: packaged add-on installs, initializes IndexedDB and opens the queue", flush=True)
-    theme_tests(client)
+    theme_tests(client, screenshot)
 
     tab = create_compose(client)
     client.wait("return testCompose.document.getElementById('blockedContentOptions').value;")

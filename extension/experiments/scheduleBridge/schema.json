@@ -20,6 +20,13 @@
         "parameters": []
       },
       {
+        "name": "getTheme",
+        "description": "Read resolved Thunderbird UI colors for the owning window.",
+        "type": "function",
+        "async": true,
+        "parameters": [{ "name": "windowId", "type": "integer" }]
+      },
+      {
         "name": "notificationIcon",
         "type": "function",
         "async": true,
@@ -194,6 +201,14 @@
       }
     ],
     "events": [
+      {
+        "name": "onThemeChanged",
+        "type": "function",
+        "parameters": [
+          { "name": "windowId", "type": "integer" },
+          { "name": "theme", "type": "object", "additionalProperties": { "type": "string" } }
+        ]
+      },
       {
         "name": "onQueueChanged",
         "type": "function",

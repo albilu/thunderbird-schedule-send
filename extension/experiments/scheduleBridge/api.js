@@ -71,25 +71,33 @@ async function embedImages(window, html) {
 
 var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
-    this.windows = new Map();
-    this.locked = new Set();
-    this.sources = new Map();
+    this.windows ||= new Map();
+    this.locked ||= new Set();
+    this.sources ||= new Map();
     this.listenerId = `${context.extension.id}-schedule-position`;
     const composeWindow = tabId => {
       const window = context.extension.tabManager.get(tabId).nativeTab;
       if (!window?.gMsgCompose || window.closed) throw new ExtensionError("errorCompose");
       return window;
     };
-    const scope = { MailServices, MailUtils, MsgHdrProcessor, ExtensionError, MessageSend,
-      IOUtils, PathUtils, Services, ChromeUtils, Components, Cc, Ci, fileAt, console, setTimeout, clearTimeout };
-    this.resourceAlias = `${ExtensionCommon.makeWidgetId(context.extension.id)}-helpers`;
-    this.resources = Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler);
-    this.resources.setSubstitution(this.resourceAlias, context.extension.rootURI);
-    for (const file of ["draft-mime.js", "draft-editor.js", "drafts.js"]) {
-      Services.scriptloader.loadSubScript(`resource://${this.resourceAlias}/experiments/scheduleBridge/${file}`, scope);
+    // Background and popup contexts share native state, but each context gets
+    // its own EventManager registrations below.
+    if (!this.helpers) {
+      const scope = { MailServices, MailUtils, MsgHdrProcessor, ExtensionError, MessageSend,
+        IOUtils, PathUtils, Services, ChromeUtils, Components, Cc, Ci, fileAt, console, setTimeout, clearTimeout };
+      this.resourceAlias = `${ExtensionCommon.makeWidgetId(context.extension.id)}-helpers`;
+      this.resources = Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler);
+      this.resources.setSubstitution(this.resourceAlias, context.extension.rootURI);
+      for (const file of ["draft-mime.js", "draft-editor.js", "drafts.js", "theme.js"]) {
+        Services.scriptloader.loadSubScript(`resource://${this.resourceAlias}/experiments/scheduleBridge/${file}`, scope);
+      }
+      this.helpers = scope;
+      this.mailbox = new scope.DraftMailbox(context);
+      this.themes = new scope.NativeTheme(context);
     }
-    const mime = scope.DraftMime;
-    const mailbox = this.mailbox = new scope.DraftMailbox(context);
+    const mime = this.helpers.DraftMime;
+    const mailbox = this.mailbox;
+    const themes = this.themes;
     const queueMessageID = id => `scheduled-send-${id}@scheduled-send.invalid`;
     const stageMessage = async (payload, job) => {
       if (Services.io.offline) throw new ExtensionError("errorOffline");
@@ -230,6 +238,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           });
         },
         isOnline: async () => !Services.io.offline,
+        getTheme: async windowId => themes.get(windowId),
         notificationIcon: async () => {
           // Read Thunderbird's own branding, including the installed channel's
           // icon. Notifications cannot load privileged chrome URLs directly.
@@ -366,6 +375,13 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
           };
           if (root) walk(root);
         },
+        onThemeChanged: new ExtensionCommon.EventManager({
+          context, name: "scheduleBridge.onThemeChanged",
+          register: fire => {
+            themes.listeners.add(fire);
+            return () => themes.listeners.delete(fire);
+          }
+        }).api(),
         onRestoreEdited: new ExtensionCommon.EventManager({
           context, name: "scheduleBridge.onRestoreEdited",
           register: fire => {
@@ -385,6 +401,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
     };
   }
   onShutdown() {
+    this.themes?.stop();
     this.mailbox?.stop();
     if (this.resourceAlias) this.resources.setSubstitution(this.resourceAlias, null);
     if (this.started) ExtensionSupport.unregisterWindowListener(this.listenerId);

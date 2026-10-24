@@ -40,24 +40,34 @@ export async function request(message) {
 }
 
 export async function applyTheme() {
+  const names = ["surface", "text", "border", "field", "field-text", "field-border", "field-focus", "field-focus-text", "field-focus-border", "button", "button-text",
+    "button-border", "button-hover", "button-active", "accent", "accent-text", "accent-hover", "accent-active", "focus", "danger"];
+  const root = document.documentElement;
+  let windowId;
+  try { windowId = (await messenger.windows.getCurrent()).id; }
+  catch { return; } // Native system colors remain usable if the host is closing.
+  let revision = 0;
   const apply = theme => {
-    const colors = theme?.colors || {};
-    const mapping = { "--surface": "popup", "--text": "popup_text", "--border": "popup_border",
-      "--accent": "button_background_active", "--accent-text": "button_text_active" };
-    for (const [property, key] of Object.entries(mapping)) {
-      if (colors[key]) document.documentElement.style.setProperty(property, colors[key]);
-      else document.documentElement.style.removeProperty(property);
+    for (const name of names) {
+      const color = theme?.[name];
+      if (typeof color === "string" && CSS.supports("color", color)) root.style.setProperty(`--${name}`, color);
+      else root.style.removeProperty(`--${name}`);
     }
-    const scheme = theme?.properties?.color_scheme;
-    if (scheme === "dark" || scheme === "light") document.documentElement.style.colorScheme = scheme;
-    else if (colors.popup) {
-      const probe = el("span", { style: `color: ${colors.popup}` });
-      document.body.append(probe);
-      const channels = getComputedStyle(probe).color.match(/[\d.]+/g)?.map(Number);
-      probe.remove();
-      if (channels?.length >= 3) document.documentElement.style.colorScheme = (channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722 < 128) ? "dark" : "light";
-    } else document.documentElement.style.removeProperty("color-scheme");
+    if (["light", "dark"].includes(theme?.scheme)) root.style.colorScheme = theme.scheme;
+    else root.style.removeProperty("color-scheme");
   };
-  try { apply(await messenger.theme.getCurrent()); } catch { /* System colors remain usable. */ }
-  messenger.theme.onUpdated.addListener(info => apply(info.theme));
+  const refresh = async () => {
+    const requested = ++revision;
+    try {
+      const theme = await messenger.scheduleBridge.getTheme(windowId);
+      if (requested === revision) apply(theme);
+    } catch { /* System colors remain usable while a window closes. */ }
+  };
+  const changed = (id, theme) => { if (id === windowId) { revision++; apply(theme); } };
+  const updated = info => { if (info.windowId === undefined || info.windowId === windowId) void refresh(); };
+  messenger.scheduleBridge.onThemeChanged.addListener(changed);
+  messenger.theme.onUpdated.addListener(updated);
+  // Thunderbird removes API listeners with the extension page's context.
+  window.addEventListener("unload", () => { revision++; }, { once: true });
+  await refresh();
 }
