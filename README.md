@@ -1,6 +1,8 @@
 # Scheduled Send for Thunderbird
 
-A Thunderbird extension for scheduling email, with a dropdown beside **Send**, native theme colors, and complete English and French translations.
+[![Check and package](https://github.com/albilu/thunderbird-schedule-send/actions/workflows/check.yml/badge.svg)](https://github.com/albilu/thunderbird-schedule-send/actions/workflows/check.yml)
+
+Schedule and repeat emails in Thunderbird using your account’s synchronized IMAP Drafts. Includes a dropdown beside **Send**, delivery windows and weekday rules, native theme colors, and complete English and French translations.
 
 ## Features
 
@@ -16,13 +18,13 @@ A Thunderbird extension for scheduling email, with a dropdown beside **Send**, n
 
 ## Install
 
-Requires **Thunderbird 153 or later**. Build with Python 3:
+The current compatibility floor is **Thunderbird 153**; native integration has been validated on **153.4.0**. This is a tested-version limit, not a confirmed minimum required by every API. Earlier releases need native compatibility testing before lowering it. Build with Python 3:
 
 ```sh
 python3 scripts/package.py
 ```
 
-In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.3.2.xpi`.
+In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose the generated `.xpi` in `dist/`. Tagged releases also publish the installable XPI and its SHA-256 checksum on the [Releases page](https://github.com/albilu/thunderbird-schedule-send/releases).
 
 For development, use **Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on** and select `extension/manifest.json`.
 
@@ -98,6 +100,20 @@ SCHEDULE_TEST_LOCALE=fr npm run test:thunderbird
 ```
 
 Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, replacement of tagged drafts without duplicates, tag preservation, account-specific toolbar navigation, native notification icons, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
+
+## CI and releases
+
+Branch pushes and pull requests run syntax and translation checks, the unit tests, and packaging on GitHub Actions. Each successful run uploads the XPI and its SHA-256 checksum as an artifact, retained for 14 days. The native Thunderbird integration tests above run separately in a desktop environment.
+
+To publish a release, update the version in both `extension/manifest.json` and `package.json`, run the checks and native tests, then commit and push the changes. Create and push the matching version tag:
+
+```sh
+release_tag="v$(node -p "require('./package.json').version")"
+git tag -a "$release_tag" -m "Release $release_tag"
+git push origin "$release_tag"
+```
+
+The **Release** workflow validates that the tag matches the package version, runs the same checks and build, verifies the checksum, and publishes a GitHub Release with the XPI, checksum and generated release notes. It uses GitHub’s built-in token; no additional release secret is required.
 
 ## Architecture
 

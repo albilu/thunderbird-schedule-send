@@ -1,22 +1,75 @@
 name: Check and package
+
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Version tag to validate before packaging a release
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: Validated extension version
+        value: ${{ jobs.check.outputs.version }}
+      artifact:
+        description: Name of the tested XPI and checksum artifact
+        value: ${{ jobs.check.outputs.artifact }}
+
 permissions:
   contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact: thunderbird-scheduled-send-${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
       - run: npm run check
+      - name: Validate package version and release tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('extension/manifest.json', 'utf8'));
+          assert.match(version, /^\d+\.\d+\.\d+$/, 'Use a version in X.Y.Z format');
+          if (process.env.RELEASE_TAG) {
+            assert.equal(process.env.RELEASE_TAG, `v${version}`, 'The release tag must match the manifest version');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          NODE
       - run: npm test
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - name: Create package checksum
+        working-directory: dist
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          package="thunderbird-scheduled-send-${PACKAGE_VERSION}.xpi"
+          sha256sum "$package" > "$package.sha256"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: thunderbird-scheduled-send
-          path: dist/*.xpi
+          name: thunderbird-scheduled-send-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.xpi
+            dist/*.sha256
           if-no-files-found: error
+          retention-days: 14
