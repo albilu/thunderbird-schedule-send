@@ -22,7 +22,7 @@ Requires **Thunderbird 153 or later**. Build with Python 3:
 python3 scripts/package.py
 ```
 
-In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.3.1.xpi`.
+In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.3.2.xpi`.
 
 For development, use **Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on** and select `extension/manifest.json`.
 
@@ -34,7 +34,7 @@ For development, use **Tools → Developer Tools → Debug Add-ons → Load Temp
 4. Optionally choose a repeat interval and expand **Delivery rules** for hours and weekdays.
 5. Check the preview and click **Schedule**. The message is saved to server Drafts before the compose window closes.
 
-Open your email account’s **Drafts** folder. Scheduled drafts have a colored **Scheduled** tag and their next delivery time in the Date field. Select one and click **Manage schedule** in its message header to pause, resume, reschedule, edit or cancel. The toolbar button and **Open Drafts** shortcut open the normal Drafts folder; there is no separate queue page or custom mail folder.
+Open your email account’s **Drafts** folder. Scheduled drafts have a colored **Scheduled** tag and their next delivery time in the Date field. Select one and click **Manage schedule** in its message header to pause, resume, reschedule, edit or cancel. The **Scheduled** toolbar button opens the current account’s configured Drafts folder in the current mail tab. The compose popup’s **Open Drafts** shortcut uses the sender’s Drafts folder. There is no separate queue page or custom mail folder.
 
 Use **Edit draft**, or open the draft normally, to change its recipients, body or attachments. Delivery stops while you edit. When you explicitly save or close the draft, a popup offers **Save and keep schedule**, **Save without schedule**, or **Continue editing**. Keeping the schedule saves the edited contents and closes the editor, preserving the original time, recurrence and delivery rules. Previously paused schedules stay paused; schedules needing review still need review. If the original time has passed, the popup explains that delivery can occur at the next permitted time, possibly immediately. Automatic draft saves do not restore delivery or open the popup.
 
@@ -62,7 +62,7 @@ Existing local schedules are migrated to the sender’s server Drafts folder. Th
 
 ## Message handling and limits
 
-Server drafts contain the recipients, body, attachments, embedded images, reply references and scheduling metadata. Original attachment files need not remain available. Web-linked images stay linked and are not fetched by this extension. Scheduling replaces the composition’s existing draft after the scheduled server draft has been saved.
+Server drafts contain the recipients, body, attachments, embedded images, reply references and scheduling metadata. Original attachment files need not remain available. Web-linked images stay linked and are not fetched by this extension. Scheduling replaces the composition’s existing draft after the scheduled server draft has been saved, leaving one draft with its existing tags plus the schedule status tag. Schedule changes and cancellation preserve the user’s tags.
 
 This release supports ordinary email up to **50 MB**, including body and attachments. Encrypted or digitally signed messages, automatic public-key attachments, newsgroup posts and unsupported embedded resources are rejected before scheduling, leaving the composition open. Security settings are never silently removed. Thunderbird’s blocked-content protection is respected; review its notice before scheduling a message with blocked resources.
 
@@ -74,7 +74,7 @@ Cancelling clears the scheduling information and leaves an ordinary draft. Confi
 
 There is no telemetry, remote code, analytics, external application server or runtime dependency. Drafts are uploaded to the selected IMAP account and delivered through its configured SMTP account. Storage is not separately encrypted by this add-on.
 
-The `scheduleBridge` experiment positions the native button, locks a composition while capturing it, reads embedded resources referenced by that composition, closes it after a durable save, reads and saves scheduled server drafts, observes draft editing/deletion, and invokes native background delivery. Thunderbird grants experiments full application access. The bridge exposes no arbitrary file paths or commands.
+The `scheduleBridge` experiment positions the native button, opens account Drafts, uses Thunderbird’s application icon for notifications, locks a composition while capturing it, reads embedded resources referenced by that composition, closes it after a durable save, reads and saves scheduled server drafts, observes draft editing/deletion, and invokes native background delivery. Thunderbird grants experiments full application access. The bridge exposes no arbitrary file paths or commands.
 
 Standard permissions cover the current composition and sender identity, mail-folder navigation, selected-message identification, alarms, durable storage, notifications and theme colors. The `messagesRead` permission supports the native message controls. Only explicitly scheduled drafts owned by this profile are sent. The extension does not schedule ordinary drafts or claim another profile’s messages.
 
@@ -97,7 +97,7 @@ npm run test:thunderbird
 SCHEDULE_TEST_LOCALE=fr npm run test:thunderbird
 ```
 
-Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
+Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, replacement of tagged drafts without duplicates, tag preservation, account-specific toolbar navigation, native notification icons, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
 
 ## Architecture
 

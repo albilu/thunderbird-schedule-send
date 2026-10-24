@@ -20,6 +20,24 @@
         "parameters": []
       },
       {
+        "name": "notificationIcon",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "openDrafts",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "identityId",
+            "type": "string",
+            "optional": true
+          }
+        ]
+      },
+      {
         "name": "capture",
         "type": "function",
         "async": true,

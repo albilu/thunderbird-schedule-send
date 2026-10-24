@@ -192,8 +192,131 @@ def queued_raw(imap, job_id):
     return None
 
 
+def tagged_draft_test(client, imap, smtp):
+    original = imap.append("Drafts", b"From: sender@example.invalid\r\nTo: receiver@example.invalid\r\nSubject: Tagged original draft\r\nMessage-ID: <tagged-draft@example.invalid>\r\nDate: Sat, 24 Oct 2026 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nOriginal draft contents.\r\n", ["\\Seen", "\\Draft", "project-tag"])
+    client.async_script("""
+      const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+      const { MailUtils } = ChromeUtils.importESModule('resource:///modules/MailUtils.sys.mjs');
+      MailServices.tags.addTagForKey('project-tag', 'Project', '#008080', '');
+      const folder = MailUtils.getExistingFolder('imap://sender@127.0.0.1/Drafts');
+      await new Promise((resolve, reject) => MailServices.imap.selectFolder(folder, {
+        OnStartRunningUrl() {},
+        OnStopRunningUrl(url, status) { if (Components.isSuccessCode(status)) resolve(); else reject(new Error(String(status))); }
+      }, null));
+      const header = folder.msgDatabase.getMsgHdrForMessageID('tagged-draft@example.invalid');
+      MailServices.compose.OpenComposeWindow(null, header, folder.getUriForMsg(header),
+        Ci.nsIMsgCompType.Draft, Ci.nsIMsgCompFormat.Default, MailServices.accounts.getIdentity('id1'), null, null);
+    """)
+    client.wait("""
+      globalThis.taggedCompose = Services.wm.getMostRecentWindow('msgcompose');
+      return taggedCompose?.composeEditorReady;
+    """)
+    tab_id = client.script("return testExtension.tabManager.convert(taggedCompose).id;")
+    client.background(f"return {API}.compose.setComposeDetails(arguments[0], {{subject:'Tagged edited draft', plainTextBody:'Edited tagged draft contents.'}});", tab_id)
+    assert client.script("return taggedCompose.gMsgCompose.savedFolderURI;") == "", "Exercise a reopened draft before its first save"
+    scheduled = request(client, {"type": "schedule", "tabId": tab_id, "rule": {"startAt": int(time.time() * 1000) + 3600000}})["job"]
+    client.wait("return taggedCompose.closed;")
+    remaining = [m for m in imap.mailboxes["Drafts"] if b"Subject: Tagged" in m["raw"] and "\\Deleted" not in m["flags"]]
+    assert len(remaining) == 1, [(m["uid"], sorted(m["flags"])) for m in remaining]
+    deadline = time.monotonic() + 10
+    while original in imap.mailboxes["Drafts"] and time.monotonic() < deadline:
+        time.sleep(.1)  # Thunderbird can report deletion before UID EXPUNGE finishes.
+    assert original not in imap.mailboxes["Drafts"], "The original draft must be replaced on the server"
+    assert {"project-tag", "scheduledsend-pending"}.issubset(remaining[0]["flags"]), remaining[0]["flags"]
+    assert b"Edited tagged draft contents." in remaining[0]["raw"]
+    for action, status in [("pause", "paused"), ("resume", "pending")]:
+        request(client, {"type": "act", "id": scheduled["id"], "action": action})
+        assert {"project-tag", f"scheduledsend-{status}"}.issubset(queued_raw(imap, scheduled["id"])["flags"])
+    request(client, {"type": "edit", "id": scheduled["id"]})
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == scheduled["id"])
+        if state["status"] == "cancelled" and state.get("draftCleaned"):
+            break
+        time.sleep(.1)
+    assert state.get("draftCleaned"), state
+    client.async_script("""
+      globalThis.editedCompose = Services.wm.getMostRecentWindow('msgcompose');
+      editedCompose.document.getElementById('msgSubject').value = 'Tagged edited again';
+      editedCompose.gContentChanged = true;
+      await editedCompose.GenericSendMessage(Ci.nsIMsgCompDeliverMode.AutoSaveAsDraft);
+    """)
+    client.wait("return !editedCompose.gSaveOperationInProgress;")
+    previous_jobs = {j["id"] for j in request(client, {"type": "list"})["jobs"]}
+    finish_edited_draft(client, 0, "save")
+    client.wait("return editedCompose.closed;", timeout=25)
+    restored = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] not in previous_jobs)
+    assert {"project-tag", "scheduledsend-pending"}.issubset(queued_raw(imap, restored["id"])["flags"]), queued_raw(imap, restored["id"])["flags"]
+    assert restored["nextAt"] == scheduled["nextAt"]
+    scheduled = restored
+    request(client, {"type": "act", "id": scheduled["id"], "action": "cancel"})
+    remaining = [m for m in imap.mailboxes["Drafts"] if b"Subject: Tagged" in m["raw"] and "\\Deleted" not in m["flags"]]
+    assert len(remaining) == 1 and "project-tag" in remaining[0]["flags"]
+    assert not any(flag.startswith("scheduledsend-") for flag in remaining[0]["flags"])
+    assert len(smtp.messages) == 2
+    print("PASS: scheduling an edited tagged draft replaces its source and preserves user tags through pause/resume/edit/cancel", flush=True)
+
+
+def scheduled_button_test(client, imap):
+    folders = client.script("""
+      const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+      const { MailUtils } = ChromeUtils.importESModule('resource:///modules/MailUtils.sys.mjs');
+      const server = MailServices.accounts.createIncomingServer('second', '127.0.0.1', 'imap');
+      server.port = arguments[0];
+      server.socketType = 0;
+      server.authMethod = 3;
+      server.prettyName = 'Second IMAP test account';
+      const identity = MailServices.accounts.createIdentity();
+      identity.email = 'second@example.invalid';
+      identity.draftsFolderURI = server.serverURI + '/Drafts';
+      const account = MailServices.accounts.createAccount();
+      account.incomingServer = server;
+      account.addIdentity(identity);
+      return ['imap://sender@127.0.0.1', server.serverURI].map(uri => ({
+        inbox: testExtension.folderManager.convert(MailUtils.getOrCreateFolder(uri + '/INBOX')).id,
+        drafts: testExtension.folderManager.convert(MailUtils.getOrCreateFolder(uri + '/Drafts')).id,
+        draftURI: uri + '/Drafts'
+      }));
+    """, imap.server_address[1])
+    tab = client.background(f"return {API}.mailTabs.create({{displayedFolder: arguments[0]}});", folders[0]["inbox"])
+    count = client.background(f"return (await {API}.mailTabs.query({{}})).length;")
+    for folder in [folders[0], folders[1], folders[0]]:
+        client.background(f"await {API}.mailTabs.update(arguments[0], {{displayedFolder: arguments[1]}}); await {API}.tabs.update(arguments[0], {{active: true}});", tab["id"], folder["inbox"])
+        client.wait("""
+          globalThis.scheduledButton = Services.wm.getMostRecentWindow('mail:3pane').document.querySelector(
+            '#unifiedToolbarContent [extension="scheduled-send@thunderbird-schedule-send.local"]');
+          return scheduledButton?.label?.textContent;
+        """)
+        assert client.script("return scheduledButton.label.textContent;") == MESSAGES["queueTitle"]["message"]
+        client.script("scheduledButton.click();")
+        client.wait(f"return testExtension.tabManager.get({tab['id']}).nativeTab.chromeBrowser.contentWindow.gFolder?.URI === {json.dumps(folder['draftURI'])};")
+        current = client.background(f"return (await {API}.mailTabs.query({{active: true, currentWindow: true}}))[0];")
+        assert current["id"] == tab["id"] and current["displayedFolder"]["id"] == folder["drafts"], current
+        assert client.background(f"return (await {API}.mailTabs.query({{}})).length;") == count
+    screenshot(client, "scheduled-button.png")
+    print("PASS: Scheduled toolbar button opens the corresponding account Drafts in the current mail tab", flush=True)
+
+
 def run_tests(client, xpi, smtp, imap):
     client.script("Services.io.offline = false;")
+    # Capture actual decoded native alerts, without displaying desktop notices.
+    client.script("""
+      globalThis.nativeNotifications = [];
+      const alerts = {
+        QueryInterface: ChromeUtils.generateQI(['nsIAlertsService']),
+        showAlert(alert, listener) {
+          nativeNotifications.push({name: alert.name, title: alert.title, imageURL: alert.imageURL});
+          listener?.observe(null, 'alertshow', alert.name);
+        },
+        closeAlert() {}
+      };
+      globalThis.alertFactory = {
+        QueryInterface: ChromeUtils.generateQI(['nsIFactory']),
+        createInstance(iid) { return alerts.QueryInterface(iid); }
+      };
+      Components.manager.QueryInterface(Ci.nsIComponentRegistrar).registerFactory(
+        Components.ID('{ecff5129-7782-4d23-8c59-63dc14ac6063}'), 'Test alerts', '@mozilla.org/alerts-service;1', alertFactory);
+    """)
     print(f"Thunderbird {client.script('return Services.appinfo.version;')}, locale {LOCALE}", flush=True)
     installed = client.async_script("""
       const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
@@ -414,6 +537,8 @@ def run_tests(client, xpi, smtp, imap):
     assert plain_message["Message-ID"] != message["Message-ID"]
     print("PASS: plain-text Unicode delivery, requested vCard and fresh Message-ID", flush=True)
 
+    tagged_draft_test(client, imap, smtp)
+
     # Exercise actual queue controls and a recurring schedule without sending it.
     tab = create_compose(client, "Recurring check", attachment=False)
     rule = {"startAt": int(time.time() * 1000) + 3600000, "recurrence": {"unit": "monthly", "interval": 1}, "weekdays": [1, 2, 3, 4, 5], "window": {"start": "01:00", "end": "05:00"}}
@@ -582,6 +707,16 @@ def run_tests(client, xpi, smtp, imap):
     assert reviewed["status"] == "review" and reviewed["error"] == "errorInterrupted", reviewed
     assert len(smtp.messages) == 2
     print("PASS: interrupted send is held for review across native reload", flush=True)
+
+    client.wait(f"return nativeNotifications.some(n => n.name === 'review-{interrupted['id']}');")
+    notification = client.script("return nativeNotifications.find(n => n.name === arguments[0]);", f"review-{interrupted['id']}")
+    app_icon = client.background(f"return {API}.scheduleBridge.notificationIcon();")
+    assert notification["imageURL"] == app_icon and notification["title"] == MESSAGES["queueTitle"]["message"], notification
+    icon_bytes = base64.b64decode(app_icon.split(",", 1)[1])
+    assert icon_bytes.startswith(b"\x89PNG\r\n\x1a\n") and int.from_bytes(icon_bytes[16:20], "big") == 64
+    print("PASS: scheduled-message notifications decode and display Thunderbird's application icon", flush=True)
+
+    scheduled_button_test(client, imap)
 
     tab = create_compose(client, "Security check", attachment=False)
     client.script("testCompose.gSendSigned = true;")

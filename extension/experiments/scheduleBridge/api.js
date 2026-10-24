@@ -73,6 +73,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
     this.windows = new Map();
     this.locked = new Set();
+    this.sources = new Map();
     this.listenerId = `${context.extension.id}-schedule-position`;
     const composeWindow = tabId => {
       const window = context.extension.tabManager.get(tabId).nativeTab;
@@ -181,7 +182,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
         }
         const draftId = queueMessageID(job.id);
         raw = mime.rewrite(raw, { job, messageId: draftId, date: job.nextAt });
-        return mailbox.append(job, raw, draftId, mime.token(job));
+        return mailbox.append(job, raw, draftId, mime.token(job), native.keywords);
       } catch (error) {
         console.error("Scheduled Send draft creation failed", error);
         throw new ExtensionError(error.message || String(error));
@@ -224,10 +225,26 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
               this.windows.get(window)?.observer.disconnect();
               this.windows.delete(window);
               this.locked.delete(window);
+              this.sources.delete(window);
             }
           });
         },
         isOnline: async () => !Services.io.offline,
+        notificationIcon: async () => {
+          // Read Thunderbird's own branding, including the installed channel's
+          // icon. Notifications cannot load privileged chrome URLs directly.
+          return this.notificationIcon ||= new Promise((resolve, reject) => {
+            NetUtil.asyncFetch({ uri: "chrome://branding/content/icon64.png", loadUsingSystemPrincipal: true }, (stream, status) => {
+              try {
+                if (!Components.isSuccessCode(status)) throw new ExtensionError("errorStorage");
+                const raw = NetUtil.readInputStreamToString(stream, stream.available());
+                const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+                const base64 = ChromeUtils.base64URLEncode(bytes, { pad: true }).replaceAll("-", "+").replaceAll("_", "/");
+                resolve(`data:image/png;base64,${base64}`);
+              } catch (error) { reject(error); } finally { stream?.close(); }
+            });
+          });
+        },
         capture: async tabId => {
           const window = composeWindow(tabId);
           if (window.gWindowLocked || window.gSendOperationInProgress || window.gSaveOperationInProgress) throw new ExtensionError("errorComposeBusy");
@@ -242,6 +259,11 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
             // change the recipients of an already-authorized scheduled message.
             window.gMsgCompose.expandMailingLists();
             const native = {};
+            const source = mailbox.composeHeader(window);
+            if (source) {
+              this.sources.set(window, { folder: source.folder, messageKey: source.messageKey, messageId: source.messageId });
+              native.keywords = mailbox.userKeywords(source);
+            }
             for (const name of ["from", "to", "cc", "bcc", "replyTo", "followupTo", "newsgroups", "references", "fcc", "fcc2", "contentLanguage"]) {
               native[name] = fields[name] || "";
             }
@@ -253,6 +275,7 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
               : null;
             return { native, body };
           } catch (error) {
+            this.sources.delete(window);
             this.locked.delete(window);
             window.ToggleWindowLock(false);
             throw error;
@@ -260,17 +283,31 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
         },
         release: async (tabId, close) => {
           const window = composeWindow(tabId);
-          if (!this.locked.delete(window)) return;
-          window.ToggleWindowLock(false);
-          if (close) {
-            // The server draft and local delivery journal are both committed.
-            // Replace an existing/auto-saved ordinary draft, as Thunderbird does.
-            if (window.gMsgCompose.compFields.draftId) window.RemoveDraft();
-            window.gContentChanged = false;
-            window.gMsgCompose.bodyModified = false;
-            window.gReceiptOptionChanged = false;
-            window.gDSNOptionChanged = false;
-            window.close();
+          if (!this.locked.has(window)) return;
+          try {
+            if (close) {
+              // Both the server draft and delivery journal are committed. A
+              // reopened draft has no savedFolderURI until it is saved again,
+              // so RemoveDraft() cannot reliably remove it. Use the exact
+              // source captured from draftId, never a subject or last-save URI.
+              const source = this.sources.get(window);
+              if (source) {
+                const header = source.folder.msgDatabase.getMsgHdrForMessageID(source.messageId);
+                if (header) {
+                  if (header.messageKey !== source.messageKey) throw new ExtensionError("errorStorage");
+                  await mailbox.removeHeader(header);
+                }
+              }
+              window.gContentChanged = false;
+              window.gMsgCompose.bodyModified = false;
+              window.gReceiptOptionChanged = false;
+              window.gDSNOptionChanged = false;
+              window.close();
+            }
+          } finally {
+            this.sources.delete(window);
+            this.locked.delete(window);
+            if (!window.closed) window.ToggleWindowLock(false);
           }
         },
         deliver: async job => mailbox.deliver(job),
@@ -286,6 +323,21 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
         draftsFolder: async identityId => {
           const id = identityId || MailServices.accounts.defaultAccount?.defaultIdentity?.key;
           return context.extension.folderManager.convert(mailbox.folder(id));
+        },
+        openDrafts: async identityId => {
+          const id = identityId || MailServices.accounts.defaultAccount?.defaultIdentity?.key;
+          const folder = mailbox.folder(id);
+          folder.setFlag(Ci.nsMsgFolderFlags.Drafts);
+          // Use Thunderbird's folder command to reuse the current mail tab.
+          // mailTabs.update can stall while an account's folders are loading.
+          const open = () => {
+            MailUtils.displayFolderIn3Pane(folder.URI);
+            return Services.wm.getMostRecentWindow("mail:3pane").gTabmail.currentAbout3Pane?.gFolder?.URI === folder.URI;
+          };
+          if (open()) return;
+          // A newly connected account may not yet have listed its Drafts row.
+          if (!Services.io.offline) await mailbox.refresh(folder);
+          if (!open()) throw new ExtensionError("errorStorage");
         },
         queuedId: async messageId => {
           const header = context.extension.messageManager.get(messageId);
@@ -347,5 +399,6 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
     }
     this.windows?.clear();
     this.locked?.clear();
+    this.sources?.clear();
   }
 };

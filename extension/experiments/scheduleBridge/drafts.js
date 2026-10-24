@@ -5,6 +5,7 @@ var DraftMailbox = class {
     this.jobs = new Map();
     this.editing = new Map();
     this.editIntents = new Map();
+    this.taggedEditors = new Map();
     this.internalDeletes = new Set();
     this.listeners = new Set();
   }
@@ -31,6 +32,7 @@ var DraftMailbox = class {
   stop() {
     if (this.observer) MailServices.mfn.removeListener(this.observer);
     for (const editor of this.editing.values()) editor.dispose();
+    for (const dispose of this.taggedEditors.values()) dispose();
     this.listeners.clear();
     this.editIntents.clear();
   }
@@ -66,12 +68,66 @@ var DraftMailbox = class {
     if (!configuredURI?.startsWith("imap:")) throw new ExtensionError("errorServerDrafts");
     const folder = MailUtils.getOrCreateFolder(configuredURI);
     if (!folder || folder.server.type !== "imap") throw new ExtensionError("errorServerDrafts");
-    if (!uri) folder.setFlag(Ci.nsMsgFolderFlags.Drafts);
     return folder;
   }
   header(job) {
     if (!job.draft || job.owner !== this.owner) return null;
     return this.folder(job.identityId, job.draft.folderURI).msgDatabase.getMsgHdrForMessageID(job.draft.messageId);
+  }
+  composeHeader(window) {
+    const uri = window.gMsgCompose?.compFields.draftId?.replace(/\?.*/, "");
+    if (!uri) return null;
+    const native = Cc["@mozilla.org/messenger;1"].createInstance(Ci.nsIMessenger);
+    const header = native.msgHdrFromURI(uri);
+    if (!header?.folder) throw new ExtensionError("errorStorage");
+    if (!header.folder.getFlag(Ci.nsMsgFolderFlags.Drafts) && window.gMsgCompose.type !== Ci.nsIMsgCompType.Draft) return null;
+    return header;
+  }
+  userKeywords(header) {
+    return header.getStringProperty("keywords").split(/\s+/).filter(k => k && !k.startsWith("scheduledsend-")).join(" ");
+  }
+  preserveEditorTags(window, header) {
+    if (!header || this.taggedEditors.has(window)) return;
+    let keywords = this.userKeywords(header);
+    let saving = false;
+    // Native draft saves replace the IMAP message without copying its tags.
+    // Remember user tags before each save and apply them to its replacement,
+    // including automatic saves made before the user clicks Schedule.
+    const remember = event => {
+      const mode = Ci.nsIMsgCompDeliverMode;
+      saving = [mode.SaveAsDraft, mode.AutoSaveAsDraft].includes(event.detail.msgType);
+      if (!saving) return;
+      try {
+        const source = this.composeHeader(window);
+        if (source) keywords = this.userKeywords(source);
+      } catch (error) { console.error("Scheduled Send source tags unavailable", error); }
+    };
+    const listener = {
+      NotifyComposeFieldsReady() {}, NotifyComposeBodyReady() {}, ComposeProcessDone() {},
+      SaveInFolderDone: folderURI => {
+        if (!saving) return;
+        saving = false;
+        if (!keywords) return;
+        try {
+          // draftId still points to the old message during this callback.
+          // The completed native copy holds the new message's actual key.
+          const folder = MailUtils.getExistingFolder(folderURI);
+          const key = window.gMsgCompose.messageSend?.messageKey;
+          if (!folder || key == null || key === 0xffffffff) throw new ExtensionError("errorStorage");
+          folder.addKeywordsToMessages([folder.GetMessageHeader(key)], keywords);
+        } catch (error) { console.error("Scheduled Send draft tag preservation failed", error); }
+      }
+    };
+    const dispose = () => {
+      window.removeEventListener("compose-send-message", remember);
+      window.removeEventListener("unload", dispose);
+      if (!window.closed) window.gMsgCompose?.UnregisterStateListener(listener);
+      this.taggedEditors.delete(window);
+    };
+    this.taggedEditors.set(window, dispose);
+    window.gMsgCompose.RegisterStateListener(listener);
+    window.addEventListener("compose-send-message", remember);
+    window.addEventListener("unload", dispose, { once: true });
   }
   async refresh(folder) {
     // Use a listener attached to this specific IMAP operation. The folder's
@@ -111,9 +167,10 @@ var DraftMailbox = class {
     if (Services.io.offline) return true;
     return Boolean(await this.read(job, refresh));
   }
-  async append(job, raw, messageId, token) {
+  async append(job, raw, messageId, token, keywords = "") {
     if (Services.io.offline) throw new ExtensionError("errorOffline");
     const folder = this.folder(job.identityId, job.draft?.folderURI);
+    folder.setFlag(Ci.nsMsgFolderFlags.Drafts);
     await this.refresh(folder);
     // A deterministic initial Message-ID makes an interrupted migration retryable.
     if (folder.msgDatabase.getMsgHdrForMessageID(messageId)) {
@@ -130,7 +187,7 @@ var DraftMailbox = class {
     try {
       await new Promise((resolve, reject) => MailServices.copy.copyFileMessage(fileAt(path), folder, null, true,
         Ci.nsMsgMessageFlags.Read | Ci.nsMsgMessageFlags.Draft,
-        token ? `scheduledsend-${job.status}` : "", {
+        [keywords, token ? `scheduledsend-${job.status}` : ""].filter(Boolean).join(" "), {
           QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
           onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
           onStopCopy(status) {
@@ -153,18 +210,21 @@ var DraftMailbox = class {
   }
   async remove(job) {
     const header = this.header(job);
-    if (!header) { this.jobs.delete(job.draft.messageId); return; }
-    this.internalDeletes.add(header.messageId);
-    await new Promise((resolve, reject) => header.folder.deleteMessages([header], null, true, false, {
-      QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
-      onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
-      onStopCopy(status) {
-        if (Components.isSuccessCode(status)) resolve();
-        else reject(new ExtensionError("errorStorage"));
-      }
-    }, false));
+    if (header) await this.removeHeader(header);
     this.jobs.delete(job.draft.messageId);
-    this.internalDeletes.delete(job.draft.messageId);
+  }
+  async removeHeader(header) {
+    this.internalDeletes.add(header.messageId);
+    try {
+      await new Promise((resolve, reject) => header.folder.deleteMessages([header], null, true, false, {
+        QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
+        onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
+        onStopCopy(status) {
+          if (Components.isSuccessCode(status)) resolve();
+          else reject(new ExtensionError("errorStorage"));
+        }
+      }, false));
+    } finally { this.internalDeletes.delete(header.messageId); }
   }
   highlight(job) {
     const header = this.header(job);
@@ -182,15 +242,13 @@ var DraftMailbox = class {
     if (!current) return null;
     const messageId = `scheduled-send-${Services.uuid.generateUUID().toString().slice(1, -1)}@scheduled-send.invalid`;
     const raw = DraftMime.rewrite(current.raw, { job, messageId, date: job.nextAt || Date.now() });
-    return this.append(job, raw, messageId, DraftMime.token(job));
+    return this.append(job, raw, messageId, DraftMime.token(job), this.userKeywords(current.header));
   }
   onCompose(window) {
     const detect = () => {
       try {
-        const uri = window.gMsgCompose?.compFields.draftId?.replace(/\?.*/, "");
-        if (!uri) return;
-        const native = Cc["@mozilla.org/messenger;1"].createInstance(Ci.nsIMessenger);
-        const header = native.msgHdrFromURI(uri);
+        const header = this.composeHeader(window);
+        this.preserveEditorTags(window, header);
         const job = this.jobForHeader(header);
         if (!job || !["pending", "paused", "review"].includes(job.status) || this.editing.has(job.id)) return;
         const previous = this.editIntents.get(job.id) || job;
@@ -221,7 +279,7 @@ var DraftMailbox = class {
     const current = await this.read(job, true, true);
     if (!current) return;
     const messageId = `draft-${Services.uuid.generateUUID().toString().slice(1, -1)}@scheduled-send.invalid`;
-    await this.append(job, DraftMime.rewrite(current.raw, { messageId, date: Date.now() }), messageId, null);
+    await this.append(job, DraftMime.rewrite(current.raw, { messageId, date: Date.now() }), messageId, null, this.userKeywords(current.header));
     await this.remove(job);
   }
   async deliver(job) {

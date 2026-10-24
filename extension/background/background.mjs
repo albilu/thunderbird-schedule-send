@@ -8,6 +8,7 @@ const captures = new Set();
 const ports = new Set();
 const notified = new Set();
 const MAX_BYTES = 50 * 1024 * 1024;
+let notificationIcon;
 
 async function changed() {
   // Metadata is already committed; a folder repaint/cleanup failure cannot
@@ -30,7 +31,7 @@ async function changed() {
       if (notified.has(key)) continue;
       notified.add(key);
       await api.notifications.create(`review-${job.id}`, {
-        type: "basic", iconUrl: api.runtime.getURL("icons/schedule.svg"),
+        type: "basic", iconUrl: await (notificationIcon ||= api.scheduleBridge.notificationIcon()),
         title: api.i18n.getMessage("queueTitle"), message: api.i18n.getMessage("notificationReview")
       });
     }
@@ -88,18 +89,26 @@ async function schedule(tabId, rule, previous = null) {
   }
 }
 
-async function openQueue(message = {}) {
+async function openQueue(message = {}, clickedTab = null) {
   await ready;
+  const active = clickedTab || (await api.tabs.query({ active: true, currentWindow: true }))[0];
+  const mailTabs = await api.mailTabs.query({});
+  const current = mailTabs.find(tab => tab.id === active?.id);
+  const context = current || mailTabs.find(tab => tab.active && tab.windowId === active?.windowId);
   let identityId = message.id ? (await store.get(message.id))?.identityId : undefined;
   if (message.tabId) identityId = (await api.compose.getComposeDetails(message.tabId)).identityId;
   if (!identityId) {
-    const [tab] = await api.mailTabs.query({ active: true, currentWindow: true });
-    if (tab?.displayedFolder) identityId = (await api.accounts.get(tab.displayedFolder.accountId)).identities[0]?.id;
+    // An empty or hidden message pane may never finish loading. Folder
+    // navigation needs the mail selection, without waiting for that pane.
+    const selected = current ? (await api.mailTabs.getSelectedMessages(current.id)).messages : [];
+    const displayed = selected.length === 1 ? selected[0] : active?.type === "messageDisplay"
+      ? await api.messageDisplay.getDisplayedMessage(active.id) : null;
+    const jobId = displayed && await api.scheduleBridge.queuedId(displayed.id);
+    if (jobId) identityId = (await store.get(jobId))?.identityId;
+    const accountId = displayed?.folder?.accountId || context?.displayedFolder?.accountId;
+    if (!identityId && accountId) identityId = (await api.identities.getDefault(accountId))?.id;
   }
-  const folder = await api.scheduleBridge.draftsFolder(identityId || null);
-  const existing = (await api.mailTabs.query({})).find(tab => tab.displayedFolder?.id === folder.id);
-  if (existing) await api.tabs.update(existing.id, { active: true });
-  else await api.mailTabs.create({ displayedFolder: folder.id, sortType: "date", sortOrder: "ascending" });
+  await api.scheduleBridge.openDrafts(identityId || null);
 }
 
 const ready = (async () => {
@@ -165,7 +174,7 @@ api.runtime.onMessage.addListener(async (message, sender) => {
 const tick = () => ready.then(() => scheduler.tick()).catch(error => console.error("Scheduled Send queue check failed", error));
 api.alarms.onAlarm.addListener(alarm => { if (["heartbeat", "next-send"].includes(alarm.name)) void tick(); });
 window.addEventListener("online", tick);
-api.browserAction.onClicked.addListener(() => void openQueue().catch(console.error));
+api.browserAction.onClicked.addListener(tab => void openQueue({}, tab).catch(console.error));
 api.notifications.onClicked.addListener(() => void openQueue().catch(console.error));
 api.scheduleBridge.onQueueChanged.addListener(ids => {
   // Capture removal intent even if Thunderbird immediately undoes a move.
