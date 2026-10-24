@@ -10,7 +10,8 @@ A Thunderbird extension for scheduling email, with a dropdown beside **Send**, n
 - Limit delivery to a time window, including windows crossing midnight.
 - Select the weekdays on which messages may be sent.
 - Preview the next delivery before scheduling.
-- Manage the persistent queue: pause, resume, reschedule, open an editable copy, cancel, and view history.
+- Manage queued mail in **Local Folders → Scheduled Send**, with native message previews, attachments, search and status tags.
+- Pause, resume, reschedule, open an editable copy or cancel from each message’s **Manage schedule** button.
 - Preserve attachments, HTML/plain text, embedded images, reply headers and Bcc recipients.
 
 ## Install
@@ -21,7 +22,7 @@ Requires **Thunderbird 153 or later**. Build with Python 3:
 python3 scripts/package.py
 ```
 
-In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.1.0.xpi`.
+In Thunderbird, select **Add-ons and Themes → Extensions → gear menu → Install Add-on From File**, then choose `dist/thunderbird-scheduled-send-0.2.0.xpi`.
 
 For development, use **Tools → Developer Tools → Debug Add-ons → Load Temporary Add-on** and select `extension/manifest.json`.
 
@@ -33,7 +34,13 @@ For development, use **Tools → Developer Tools → Debug Add-ons → Load Temp
 4. Optionally choose a repeat interval and expand **Delivery rules** for hours and weekdays.
 5. Check the preview and click **Schedule**. A durable message snapshot is saved before the compose window closes.
 
-Open **Scheduled messages** from the main toolbar button, the popup, or the add-on preferences. **Open a copy** pauses the original schedule and opens an editable copy. Cancel the old paused schedule if you schedule the new copy. Restored copies start a new conversation; original scheduled replies retain their reply headers.
+Open **Local Folders → Scheduled Send**, or use the main toolbar button / **Open Scheduled Send folder** in the scheduling popup. The queue is an ordinary local mail folder, not an add-on settings page. Select a message and click **Manage schedule** in its message header to pause, resume, reschedule, edit a copy or cancel. Tags show **Scheduled**, **Paused**, **Sending** or **Needs review**; the popup shows the exact next delivery and repeat rules.
+
+**Open a copy** pauses the original schedule before opening an editable copy. Cancel the old paused schedule if you schedule the new copy. Restored copies start a new conversation; original scheduled replies retain their reply headers.
+
+Moving or deleting a message out of the queue cancels future sends, including while offline. **Cancel schedule** moves the copy to Trash. Moving a message back, importing an `.eml`, or copying ordinary mail into the folder does not activate a schedule. A send already in progress cannot be recalled. After a successful one-time send, the queue copy is removed; sent mail remains in the sender’s configured Sent folder. Recurring messages stay in the queue. If delivery succeeds but the Sent copy fails, the queue copy is kept for recovery.
+
+A dedicated local folder keeps ordinary drafts separate and avoids synchronizing active schedules through IMAP. Source drafts are retained. An existing unrelated folder with the same name is left untouched; a numbered queue folder is created instead. Existing schedules from the initial implementation are migrated automatically without sending them or duplicating existing queue copies.
 
 ## Scheduling rules
 
@@ -55,15 +62,15 @@ This release supports ordinary email up to **50 MB**, including body and attachm
 
 Background delivery uses Thunderbird’s native MIME/SMTP services and account configuration. Interactive checks such as spellchecking, forgotten-attachment prompts and other extensions’ `compose.onBeforeSend` hooks do not run at delivery time. Review the message before scheduling. Background delivery does not update the original reply’s read/replied UI flag.
 
-Cancelling removes stored message contents and prevents future occurrences; it cannot recall mail already sent. Completed/cancelled entries keep only queue metadata until removed from history. Back up the Thunderbird profile before uninstalling if you need to preserve queued messages.
+Cancelling removes the scheduler’s private payload and prevents future occurrences; it cannot recall mail already sent. The mail copy remains in Trash until you remove it there. Completed/cancelled schedules retain only internal metadata, which prevents old copies from being reactivated. Queued mail remains readable in Local Folders when the add-on is disabled. Back up the Thunderbird profile before uninstalling if you need to preserve schedules as well as message contents.
 
 ## Privacy and permissions
 
 There is no telemetry, remote code, analytics, external application server or runtime dependency. Message data stays in the Thunderbird profile until sent through the selected SMTP account. Storage is not separately encrypted by this add-on.
 
-The `scheduleBridge` experiment positions the native button, locks a composition while capturing it, reads embedded resources referenced by that composition, closes it after a durable save, and invokes native background delivery. Thunderbird grants experiments full application access. The bridge exposes no arbitrary file paths or commands.
+The `scheduleBridge` experiment positions the native button, locks a composition while capturing it, reads embedded resources referenced by that composition, closes it after a durable save, creates and maintains its local mail folder, observes queue deletions/moves, and invokes native background delivery. Thunderbird grants experiments full application access. The bridge exposes no arbitrary file paths or commands.
 
-Standard permissions cover the current composition and sender identity, alarms, durable storage, notifications and theme colors. The extension does not scan existing mail folders.
+Standard permissions cover the current composition and sender identity, mail-folder navigation, selected-message identification, alarms, durable storage, notifications and theme colors. The `messagesRead` permission supports the native message controls. Only messages in the add-on’s own queue folder are associated with schedules; other mail is not scheduled or modified.
 
 ## Development and validation
 
@@ -75,7 +82,7 @@ npm test
 npm run build
 ```
 
-The checks validate JavaScript syntax, packaged paths, manifest/version consistency and English/French translation parity. Calendar and state-machine tests cover DST, leap years, month-end anchors, constraints, missed repeats, offline handling, concurrent alarms and interruption recovery. Packaging is deterministic and includes only `extension/`.
+The checks validate JavaScript syntax, packaged paths, manifest/version consistency and English/French translation parity. Calendar and state-machine tests cover DST, leap years, month-end anchors, constraints, missed repeats, offline handling, concurrent alarms, native-folder cancellation and interruption recovery. Packaging is deterministic and includes only `extension/`.
 
 Native Linux integration tests use Thunderbird 153+, Xvfb, and optionally `xfwm4` and ImageMagick for screenshots:
 
@@ -92,13 +99,15 @@ Tests create a disposable profile and virtual display, and capture messages on a
 | --- | --- |
 | `extension/lib/schedule.mjs` | Calendar validation, recurrence anchors and delivery windows |
 | `extension/lib/engine.mjs` | Serialized state machine, offline handling and recovery |
-| `extension/lib/store.mjs` | Atomic IndexedDB metadata and message/attachment storage |
+| `extension/lib/store.mjs`, `folder-store.mjs` | Atomic IndexedDB storage, readable mail copies and migration |
 | `extension/background/` | Capture, commands, alarms and native-delivery adapter |
 | `extension/experiments/scheduleBridge/` | Native toolbar and mail integration |
-| `extension/popup/`, `extension/queue/` | Scheduling dropdown and management tab |
+| `extension/popup/`, `extension/message/` | Scheduling dropdown and per-message controls |
 | `extension/lib/rule-form.mjs` | Shared schedule editor and live preview |
 | `extension/_locales/` | English and French UI strings |
 | `tests/` | Unit tests and real Thunderbird/SMTP integration |
+
+A readable MIME copy is saved in the owned local folder before the schedule and complete payload commit to IndexedDB. A stable Message-ID links each mail copy to its schedule across reloads and compaction. Folder membership is checked during reconciliation and immediately before transport preparation; missing copies cancel their schedules. Folder-copy creation is idempotent, and orphan copies never schedule themselves.
 
 Before transport begins, the engine commits a `sending` marker. Success becomes `sent` and removes a one-time payload, or advances a recurring schedule. Ambiguous delivery becomes `review`; startup also converts leftover `sending` records to `review`. This avoids automatic duplicates. Exactly-once delivery cannot be guaranteed across a process crash and an external SMTP server.
 

@@ -14,9 +14,6 @@
   "queueTitle": {
     "message": "Scheduled messages"
   },
-  "queueSubtitle": {
-    "message": "Review what’s next and keep control of your sends."
-  },
   "presets": {
     "message": "Quick presets"
   },
@@ -117,7 +114,7 @@
     "message": "Scheduled copies are stored on this device. Editing an existing draft does not change a scheduled copy. Missed repeats are skipped."
   },
   "viewQueue": {
-    "message": "View queue"
+    "message": "Open Scheduled Send folder"
   },
   "scheduleMessage": {
     "message": "Schedule"
@@ -127,18 +124,6 @@
   },
   "refresh": {
     "message": "Refresh"
-  },
-  "queueFilter": {
-    "message": "Show active schedules or history"
-  },
-  "activeSchedules": {
-    "message": "Upcoming"
-  },
-  "history": {
-    "message": "History"
-  },
-  "searchSchedules": {
-    "message": "Search messages"
   },
   "online": {
     "message": "Ready to send"
@@ -163,9 +148,6 @@
   },
   "cancelSchedule": {
     "message": "Cancel schedule"
-  },
-  "removeHistory": {
-    "message": "Remove from history"
   },
   "scheduledFor": {
     "message": "Scheduled for $1"
@@ -209,21 +191,6 @@
   "status_cancelled": {
     "message": "Cancelled"
   },
-  "emptyQueue": {
-    "message": "Nothing scheduled yet"
-  },
-  "emptyHistory": {
-    "message": "No past sends yet"
-  },
-  "emptyQueueHint": {
-    "message": "Compose a message, then choose Schedule send next to Send."
-  },
-  "noResults": {
-    "message": "No matching messages"
-  },
-  "searchHint": {
-    "message": "Try another subject or recipient."
-  },
   "keepMessage": {
     "message": "Go back"
   },
@@ -240,7 +207,7 @@
     "message": "Retry anyway"
   },
   "cancelDescription": {
-    "message": "Cancel all future sends and remove the stored message copy? Open a copy first if you want to keep editing it. Messages already sent cannot be recalled."
+    "message": "Cancel all future sends and move the scheduled copy to Trash? Messages already sent cannot be recalled."
   },
   "restoredMessage": {
     "message": "A copy is open for editing. The original schedule is paused; cancel it if you schedule the new copy."
@@ -334,5 +301,23 @@
   },
   "errorDisconnected": {
     "message": "The add-on was reloaded. Close and reopen this page to reconnect."
+  },
+  "queueFolder": {
+    "message": "Scheduled Send"
+  },
+  "manageSchedule": {
+    "message": "Manage schedule"
+  },
+  "selectScheduledMessage": {
+    "message": "Select a message in the Scheduled Send folder to manage its schedule."
+  },
+  "inactiveMessage": {
+    "message": "This copy has no active schedule. Moving a message into this folder does not schedule it."
+  },
+  "folderNote": {
+    "message": "Moving or deleting this message cancels future sends. A send already in progress cannot be recalled."
+  },
+  "errorQueueRemoved": {
+    "message": "The message was moved or deleted from Scheduled Send. Its schedule has been cancelled."
   }
 }

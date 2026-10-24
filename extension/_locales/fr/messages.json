@@ -14,9 +14,6 @@
   "queueTitle": {
     "message": "Messages programmés"
   },
-  "queueSubtitle": {
-    "message": "Consultez vos prochains envois et gardez le contrôle."
-  },
   "presets": {
     "message": "Délais prédéfinis"
   },
@@ -117,7 +114,7 @@
     "message": "Les copies programmées sont stockées sur cet appareil. Modifier un brouillon existant ne modifie pas sa copie programmée. Les récurrences manquées sont ignorées."
   },
   "viewQueue": {
-    "message": "Voir les envois"
+    "message": "Ouvrir le dossier Envois programmés"
   },
   "scheduleMessage": {
     "message": "Programmer"
@@ -127,18 +124,6 @@
   },
   "refresh": {
     "message": "Actualiser"
-  },
-  "queueFilter": {
-    "message": "Afficher les envois actifs ou l’historique"
-  },
-  "activeSchedules": {
-    "message": "À venir"
-  },
-  "history": {
-    "message": "Historique"
-  },
-  "searchSchedules": {
-    "message": "Rechercher des messages"
   },
   "online": {
     "message": "Prêt à envoyer"
@@ -163,9 +148,6 @@
   },
   "cancelSchedule": {
     "message": "Annuler l’envoi"
-  },
-  "removeHistory": {
-    "message": "Retirer de l’historique"
   },
   "scheduledFor": {
     "message": "Prévu le $1"
@@ -209,21 +191,6 @@
   "status_cancelled": {
     "message": "Annulé"
   },
-  "emptyQueue": {
-    "message": "Aucun envoi programmé"
-  },
-  "emptyHistory": {
-    "message": "Aucun envoi passé"
-  },
-  "emptyQueueHint": {
-    "message": "Rédigez un message, puis choisissez Programmer l’envoi à côté d’Envoyer."
-  },
-  "noResults": {
-    "message": "Aucun message correspondant"
-  },
-  "searchHint": {
-    "message": "Essayez un autre objet ou destinataire."
-  },
   "keepMessage": {
     "message": "Retour"
   },
@@ -240,7 +207,7 @@
     "message": "Réessayer quand même"
   },
   "cancelDescription": {
-    "message": "Annuler tous les envois futurs et supprimer la copie stockée ? Ouvrez d’abord une copie pour la conserver et la modifier. Les messages déjà envoyés ne peuvent pas être rappelés."
+    "message": "Annuler tous les envois futurs et déplacer la copie programmée vers la corbeille ? Les messages déjà envoyés ne peuvent pas être rappelés."
   },
   "restoredMessage": {
     "message": "Une copie est ouverte pour modification. L’envoi original est suspendu ; annulez-le si vous programmez cette nouvelle copie."
@@ -334,5 +301,23 @@
   },
   "errorDisconnected": {
     "message": "Le module a été rechargé. Fermez puis rouvrez cette page pour vous reconnecter."
+  },
+  "queueFolder": {
+    "message": "Envois programmés"
+  },
+  "manageSchedule": {
+    "message": "Gérer la programmation"
+  },
+  "selectScheduledMessage": {
+    "message": "Sélectionnez un message dans le dossier Envois programmés pour gérer sa programmation."
+  },
+  "inactiveMessage": {
+    "message": "Cette copie n’a aucune programmation active. Déplacer un message dans ce dossier ne programme pas son envoi."
+  },
+  "folderNote": {
+    "message": "Déplacer ou supprimer ce message annule les envois futurs. Un envoi déjà en cours ne peut pas être rappelé."
+  },
+  "errorQueueRemoved": {
+    "message": "Le message a été déplacé ou supprimé du dossier Envois programmés. Sa programmation a été annulée."
   }
 }

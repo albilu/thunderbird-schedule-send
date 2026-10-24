@@ -1,0 +1,21 @@
+html, body { width: 420px; height: 600px; overflow: hidden; }
+body { display: flex; flex-direction: column; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px; }
+header h1 { font-size: 20px; margin-top: 5px; }
+main { padding: 0 20px 20px; overflow-y: auto; flex: 1; min-height: 0; }
+footer { padding: 12px 20px; border-top: 1px solid var(--border); }
+#connection { padding-bottom: 14px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+#connection.offline { color: var(--danger); }
+.job h2 { font-size: 18px; overflow-wrap: anywhere; }
+.recipient { overflow-wrap: anywhere; margin: 8px 0 14px; }
+.status { display: inline-block; border-radius: 20px; padding: 4px 10px; font-size: 12px; background: color-mix(in srgb, var(--surface), var(--text) 7%); }
+.status.pending { color: var(--accent); }
+.status.review { color: var(--danger); }
+.when { font-weight: 600; margin: 16px 0 8px; line-height: 1.6; }
+.rules-summary { line-height: 1.6; }
+.job .actions { margin-top: 20px; }
+.note { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); line-height: 1.6; }
+.error:not(:empty), #feedback:not(:empty) { margin: 12px 0; }
+.presets { margin-bottom: 12px; }
+.repeat-row { margin: 14px 0; }
+.rules { margin-bottom: 12px; }

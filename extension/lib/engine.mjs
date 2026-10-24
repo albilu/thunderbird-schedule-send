@@ -1,9 +1,10 @@
 import { firstOccurrence, localZone, nextAllowed, nextOccurrence, normalizeRule, ScheduleError } from "./schedule.mjs";
 
 export class Scheduler {
-  constructor({ store, deliver, online, changed = async () => {}, clock = Date.now, zone = localZone }) {
-    Object.assign(this, { store, deliver, online, changed, clock, zone });
+  constructor({ store, deliver, online, isPresent = async () => true, changed = async () => {}, clock = Date.now, zone = localZone }) {
+    Object.assign(this, { store, deliver, online, isPresent, changed, clock, zone });
     this.tail = Promise.resolve();
+    this.removedIds = new Set();
   }
   // Every mutation, including UI actions and alarms, uses one serial queue.
   serial(task) {
@@ -36,12 +37,40 @@ export class Scheduler {
       return job;
     });
   }
+  cancelRemoved(ids) {
+    const removed = new Set(ids);
+    // Make intent visible to an already-running tick before its next message.
+    // The durable cancellation still uses the serialized mutation queue.
+    for (const id of removed) this.removedIds.add(id);
+    return this.serial(async () => {
+      let changed = false;
+      for (const id of removed) {
+        const job = await this.store.get(id);
+        if (!job || !["pending", "paused", "review"].includes(job.status)) continue;
+        job.status = "cancelled";
+        job.nextAt = null;
+        await this.store.finish(job);
+        changed = true;
+      }
+      if (changed) await this.changed();
+      for (const id of removed) this.removedIds.delete(id);
+    });
+  }
+  async present(job) {
+    return !this.removedIds.has(job.id) && await this.isPresent(job);
+  }
   tick() {
     return this.serial(async () => {
-      if (!(await this.online())) return;
       const jobs = (await this.store.all()).sort((a, b) => a.nextAt - b.nextAt);
       for (const job of jobs) {
+        if (["pending", "paused", "review"].includes(job.status) && !await this.present(job)) {
+          job.status = "cancelled";
+          job.nextAt = null;
+          await this.store.finish(job);
+          continue;
+        }
         if (job.status !== "pending") continue;
+        if (!(await this.online())) continue;
         if (job.rule.timeZone !== this.zone()) {
           job.status = "paused";
           job.error = "errorTimeZone";
@@ -64,6 +93,14 @@ export class Scheduler {
           await this.store.put(job);
           continue;
         }
+        // Folder membership is authoritative. A move/delete during preparation
+        // cancels the schedule too, before committing a transport attempt.
+        if (!await this.present(job)) {
+          job.status = "cancelled";
+          job.nextAt = null;
+          await this.store.finish(job);
+          continue;
+        }
         // Commit before invoking the mail transport. A crash after this point
         // is ambiguous: it must NEVER trigger an automatic retransmission.
         job.status = "sending";
@@ -72,9 +109,14 @@ export class Scheduler {
         await this.changed();
         let result;
         try {
-          result = await this.deliver(payload);
+          result = await this.deliver(payload, job);
         } catch (error) {
-          if (error.code === "errorOffline") {
+          if (error.code === "errorQueueRemoved") {
+            job.status = "cancelled";
+            job.nextAt = null;
+            await this.store.finish(job);
+            continue;
+          } else if (error.code === "errorOffline") {
             job.status = "pending";
           } else {
             job.status = "review";
@@ -108,6 +150,13 @@ export class Scheduler {
       const job = await this.store.get(id);
       if (!job) throw new ScheduleError("errorMissingMessage");
       if (job.status === "sending") throw new ScheduleError("errorSending");
+      if (["pending", "paused", "review"].includes(job.status) && !await this.present(job)) {
+        job.status = "cancelled";
+        job.nextAt = null;
+        await this.store.finish(job);
+        await this.changed();
+        throw new ScheduleError("errorQueueRemoved");
+      }
       if (action === "remove") {
         if (!["sent", "cancelled"].includes(job.status)) throw new ScheduleError("errorAction");
         await this.store.remove(id);

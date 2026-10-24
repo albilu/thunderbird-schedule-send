@@ -29,7 +29,8 @@ LANGUAGE = "fr" if LOCALE.startswith("fr") else "en"
 MESSAGES = json.loads((ROOT / f"extension/_locales/{LANGUAGE}/messages.json").read_text())
 RESULTS = ROOT / "test-results" / LOCALE
 ADDON = "scheduled-send@thunderbird-schedule-send.local"
-QUEUE = "queue/queue.html"
+QUEUE = "message/message.html?integration"
+MANAGE = "message/message.html"
 POPUP = "popup/popup.html"
 API = "window.wrappedJSObject.messenger"
 
@@ -223,6 +224,39 @@ def run_tests(client, xpi, smtp):
     assert not smtp.messages
     print("PASS: native adjacent button, translated popup, presets, constraints, durable snapshot and compose close", flush=True)
 
+    # The queue contains actual readable RFC822 messages, independent of the UI.
+    native = client.background(f"""
+      const api = {API};
+      const folder = await api.scheduleBridge.queueFolder();
+      const messages = (await api.messages.list(folder.id)).messages;
+      const raw = await api.messages.getRaw(messages[0].id);
+      return {{folder, messages, raw: typeof raw === 'string' ? raw : await raw.text(),
+        options: api.runtime.getManifest().options_ui || null}};
+    """)
+    assert native["folder"]["name"] == MESSAGES["queueFolder"]["message"], native
+    assert len(native["messages"]) == 1 and native["options"] is None
+    queued_mail = BytesParser(policy=email.policy.default).parsebytes(native["raw"].encode())
+    assert queued_mail["Subject"] == job["subject"]
+    assert "hidden@example.invalid" in str(queued_mail["Bcc"])
+    assert any(p.get_filename() == "fixture.txt" for p in queued_mail.walk())
+    assert "scheduledsend-pending" in native["messages"][0]["tags"]
+    request(client, {"type": "queue"})
+    request(client, {"type": "queue"})
+    assert client.background(f"return (await {API}.mailTabs.query({{}})).filter(t => t.displayedFolder?.id === arguments[0]).length;", native["folder"]["id"]) == 1
+    print("PASS: real local-folder MIME copies, status tags and native queue navigation", flush=True)
+
+    # Simulate legacy metadata and an interrupted migration with a copy already
+    # present. Reload must create exactly one copy per active schedule.
+    legacy_id = modify_jobs(client, f"""
+      const original = await store.get({json.dumps(job['id'])});
+      delete original.folderBacked;
+      await store.put(original);
+      const legacy = {{...original, id: crypto.randomUUID(), subject: 'Legacy migration fixture'}};
+      const payload = await store.payload(original.id);
+      payload.details.subject = legacy.subject;
+      await store.create(legacy, payload);
+      return legacy.id;
+    """)
     # A real add-on shutdown/restart must retain both the queue and File objects.
     client.async_script("""
       const { AddonManager } = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
@@ -230,9 +264,15 @@ def run_tests(client, xpi, smtp):
       await addon.reload();
     """, ADDON)
     set_extension(client)
-    assert queue(client)["jobs"][0]["id"] == job["id"]
+    migrated = queue(client)["jobs"]
+    assert {j["id"] for j in migrated} == {job["id"], legacy_id}
+    assert all(j["folderBacked"] for j in migrated)
     assert "Café" in modify_jobs(client, "const jobs = await store.all(); return await (await store.payload(jobs[0].id)).attachments[0].file.text();")
-    print("PASS: schedules and attachment bytes survive add-on restart", flush=True)
+    assert client.background(f"return (await {API}.messages.list((await {API}.scheduleBridge.queueFolder()).id)).messages.length;") == 2
+    request(client, {"type": "act", "id": legacy_id, "action": "cancel"})
+    assert client.background(f"return (await {API}.messages.list((await {API}.scheduleBridge.queueFolder()).id)).messages.length;") == 1
+    request(client, {"type": "act", "id": legacy_id, "action": "remove"})
+    print("PASS: restart durability and idempotent migration of existing schedules", flush=True)
 
     request(client, {"type": "act", "id": job["id"], "action": "pause"})
     assert request(client, {"type": "list"})["jobs"][0]["status"] == "paused"
@@ -302,25 +342,88 @@ def run_tests(client, xpi, smtp):
     tab = create_compose(client, "Recurring check", attachment=False)
     rule = {"startAt": int(time.time() * 1000) + 3600000, "recurrence": {"unit": "monthly", "interval": 1}, "weekdays": [1, 2, 3, 4, 5], "window": {"start": "01:00", "end": "05:00"}}
     recurring = request(client, {"type": "schedule", "tabId": tab["id"], "rule": rule})["job"]
-    client.page(QUEUE, "document.getElementById('refresh').click();")
+    request(client, {"type": "queue"})
+    selected = client.background(f"""
+      const api = {API};
+      const folder = await api.scheduleBridge.queueFolder();
+      const tabs = await api.mailTabs.query({{}});
+      const tab = tabs.find(t => t.displayedFolder?.id === folder.id);
+      const messages = (await api.messages.list(folder.id)).messages;
+      const message = messages.find(m => m.subject === 'Recurring check');
+      await api.mailTabs.setSelectedMessages(tab.id, [message.id]);
+      return {{tab, message}};
+    """)
+    time.sleep(.5)
+    screenshot(client, "queue-folder.png")
+    assert client.background(f"return {API}.messageDisplayAction.isEnabled({{tabId: arguments[0]}});", selected["tab"]["id"])
+    client.background(f"return {API}.messageDisplayAction.openPopup({{windowId: arguments[0]}});", selected["tab"]["windowId"])
+    wait_page(client, MANAGE)
+    time.sleep(.3)
+    client.page(MANAGE, "document.getElementById('refresh').click();")
     time.sleep(.2)
-    screenshot(client, "queue.png")
-    client.page(QUEUE, "document.querySelector('button[data-action=" + '"reschedule"' + "]').click();")
-    assert client.page(QUEUE, "return document.getElementById('edit-dialog').open;")
-    client.page(QUEUE, "document.querySelector('#edit-rule select').value = 'yearly'; document.querySelector('#edit-rule select').dispatchEvent(new Event('change', {bubbles:true})); document.getElementById('save-edit').click();")
+    screenshot(client, "message-controls.png")
+    client.page(MANAGE, "document.querySelector('button[data-action=" + '"reschedule"' + "]').click();")
+    assert client.page(MANAGE, "return document.getElementById('edit-dialog').open;")
+    client.page(MANAGE, "document.querySelector('#edit-rule select').value = 'yearly'; document.querySelector('#edit-rule select').dispatchEvent(new Event('change', {bubbles:true})); document.getElementById('save-edit').click();")
     time.sleep(.3)
     edited = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])
     assert edited["rule"]["recurrence"]["unit"] == "yearly", edited
+    client.page(MANAGE, "document.querySelector('button[data-action=\"pause\"]').click();")
+    time.sleep(.2)
+    client.page(MANAGE, "document.querySelector('button[data-action=\"resume\"]').click();")
+    time.sleep(.2)
     request(client, {"type": "restore", "id": recurring["id"]})
     assert next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])["status"] == "paused"
-    client.page(QUEUE, "document.getElementById('refresh').click();")
-    time.sleep(.2)
-    client.page(QUEUE, "document.querySelector('button[data-action=" + '"cancel"' + "]').click();")
-    assert client.page(QUEUE, "return document.getElementById('confirmation').open;")
-    client.page(QUEUE, "document.getElementById('confirm-action').click();")
+    # Close the editable copy without sending and cancel via the native action.
+    client.script("""
+      const copy = Services.wm.getMostRecentWindow('msgcompose');
+      copy.gContentChanged = false; copy.gMsgCompose.bodyModified = false;
+      copy.close();
+      Services.wm.getMostRecentWindow('mail:3pane').focus();
+    """)
+    client.background(f"return {API}.messageDisplayAction.openPopup({{windowId: arguments[0]}});", selected["tab"]["windowId"])
+    wait_page(client, MANAGE)
+    time.sleep(.3)
+    client.page(MANAGE, "document.querySelector('button[data-action=\"cancel\"]').click();")
+    assert client.page(MANAGE, "return document.getElementById('confirmation').open;")
+    client.page(MANAGE, "document.getElementById('confirm-action').click();")
     time.sleep(.3)
     assert next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == recurring["id"])["status"] == "cancelled"
-    print("PASS: queue reschedule UI, restored editable copy, pause, resume and cancellation", flush=True)
+    print("PASS: native message controls, reschedule, restored copy, pause, resume and cancellation", flush=True)
+
+    # Native actions must cancel without relying on the custom controls or
+    # waiting for the next send alarm, including while Thunderbird is offline.
+    client.script("Services.io.offline = true;")
+    for action in ["delete", "move"]:
+        tab = create_compose(client, f"Native {action} fixture", attachment=False)
+        removed = request(client, {"type": "schedule", "tabId": tab["id"], "rule": {"startAt": int(time.time() * 1000) + 3600000}})["job"]
+        if action == "move":
+            request(client, {"type": "act", "id": removed["id"], "action": "pause"})
+        client.async_script("""
+          const { MailServices } = ChromeUtils.importESModule('resource:///modules/MailServices.sys.mjs');
+          const root = MailServices.accounts.localFoldersServer.rootFolder;
+          const folder = [...root.subFolders].find(f => f.getStringProperty('scheduledSendOwner') === arguments[0]);
+          const header = folder.msgDatabase.getMsgHdrForMessageID(`scheduled-send-${arguments[1]}@scheduled-send.local`);
+          await new Promise((resolve, reject) => {
+            const listener = {
+              onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() {return '';},
+              onStopCopy(status) { if (Components.isSuccessCode(status)) resolve(); else reject(new Error(String(status))); }
+            };
+            if (arguments[2] === 'move') MailServices.copy.copyMessages(folder, [header], root.getChildNamed('Sent'), true, listener, null, false);
+            else folder.deleteMessages([header], null, false, false, listener, false);
+          });
+        """, ADDON, removed["id"], action)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            cancelled = next(j for j in request(client, {"type": "list"})["jobs"] if j["id"] == removed["id"])
+            if cancelled["status"] == "cancelled":
+                break
+            time.sleep(.1)
+        assert cancelled["status"] == "cancelled", cancelled
+        assert modify_jobs(client, f"return !(await store.payload({json.dumps(removed['id'])}));")
+        assert len(smtp.messages) == 2
+    client.script("Services.io.offline = false;")
+    print("PASS: native delete and move cancel pending/paused mail while offline", flush=True)
 
     # Mark a durable send as interrupted, reload, and verify no retransmission.
     tab = create_compose(client, "Interrupted fixture", attachment=False)

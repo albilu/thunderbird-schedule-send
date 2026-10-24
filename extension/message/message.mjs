@@ -4,9 +4,8 @@ import { applyTheme, el, errorText, formatDate, language, localize, recurrenceTe
 localize();
 void applyTheme();
 const $ = id => document.getElementById(id);
-$("search").placeholder = t("searchSchedules");
-let jobs = [];
-let view = "active";
+let job;
+let messageId;
 let editing;
 let editForm;
 let loading = false;
@@ -33,12 +32,8 @@ function ruleSummary(job) {
 }
 
 function render() {
-  const search = $("search").value.toLocaleLowerCase();
-  const visible = jobs.filter(job => (view === "history") === ["sent", "cancelled"].includes(job.status))
-    .filter(job => `${job.subject} ${(job.to || []).join(" ")} ${job.from}`.toLocaleLowerCase().includes(search))
-    .sort((a, b) => view === "history" ? b.createdAt - a.createdAt : (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity));
   const fragment = document.createDocumentFragment();
-  for (const job of visible) {
+  if (job) {
     const button = (action, label, className = "subtle") => el("button", { type: "button", className,
       "data-action": action, "data-job": job.id, disabled: mutating, onclick: () => act(job, action) }, t(label));
     const controls = el("div", { className: "actions" });
@@ -48,40 +43,42 @@ function render() {
     if (["pending", "paused", "review"].includes(job.status)) {
       controls.append(button("reschedule", "reschedule"), button("restore", "openCopy"), button("cancel", "cancelSchedule", "subtle danger"));
     }
-    if (["sent", "cancelled"].includes(job.status)) controls.append(button("remove", "removeHistory"));
     const when = job.nextAt ? t("scheduledFor", formatDate(job.nextAt, job.rule.timeZone))
       : job.lastSentAt ? t("sentAt", formatDate(job.lastSentAt, job.rule.timeZone)) : t("status_cancelled");
     fragment.append(el("article", { className: "job", "data-job": job.id },
-      el("div", { className: "job-header" }, el("div", {}, el("h3", {}, job.subject || t("noSubject")),
+      el("div", { className: "job-header" }, el("div", {}, el("h2", {}, job.subject || t("noSubject")),
         el("p", { className: "recipient hint" }, t("toRecipients", (job.to || []).join(", ") || t("otherRecipients")))),
         el("span", { className: `status ${job.status}` }, t(`status_${job.status}`))),
       el("p", { className: "when" }, when), el("p", { className: "rules-summary hint" }, ruleSummary(job)),
       job.error ? el("p", { className: "error" }, t(job.error)) : null, controls));
   }
-  if (!visible.length) fragment.append(el("div", { className: "empty" }, el("div", { className: "empty-icon", "aria-hidden": "true" }, "◷"),
-    el("h2", {}, t(search ? "noResults" : view === "history" ? "emptyHistory" : "emptyQueue")),
-    el("p", { className: "hint" }, t(search ? "searchHint" : "emptyQueueHint"))));
+  if (!job) fragment.append(el("p", { className: "hint" }, t(messageId ? "inactiveMessage" : "selectScheduledMessage")));
   // Preserve keyboard focus across live queue updates.
   const active = document.activeElement;
   const focused = active?.dataset.action ? { action: active.dataset.action, id: active.dataset.job } : null;
-  $("jobs").replaceChildren(fragment);
-  if (focused) [...$("jobs").querySelectorAll("button")].find(b => b.dataset.action === focused.action && b.dataset.job === focused.id)?.focus();
+  $("message").replaceChildren(fragment);
+  if (focused) [...$("message").querySelectorAll("button")].find(b => b.dataset.action === focused.action && b.dataset.job === focused.id)?.focus();
 }
 
 async function load() {
   if (loading) { reloadAgain = true; return; }
   loading = true;
   try {
-    const response = await request({ type: "list" });
-    jobs = response.jobs;
-    $("connection").textContent = t(response.online ? "online" : "offline");
-    $("connection").classList.toggle("offline", !response.online);
-    $("timezone").textContent = response.timeZone;
+    if (!messageId) {
+      const [tab] = await messenger.tabs.query({ active: true, currentWindow: true });
+      if (tab && ["mail", "messageDisplay"].includes(tab.type)) messageId = (await messenger.messageDisplay.getDisplayedMessage(tab.id))?.id;
+    }
+    if (messageId) {
+      const response = await request({ type: "selected", messageId });
+      job = response.job;
+      $("connection").textContent = t(response.online ? "online" : "offline");
+      $("connection").classList.toggle("offline", !response.online);
+    }
     render();
   } catch (error) { $("error").textContent = error.message; }
   finally {
     loading = false;
-    $("jobs").setAttribute("aria-busy", "false");
+    $("message").setAttribute("aria-busy", "false");
     if (reloadAgain) { reloadAgain = false; void load(); }
   }
 }
@@ -131,15 +128,10 @@ $("edit-form").addEventListener("submit", async event => {
 });
 $("close-edit").addEventListener("click", () => $("edit-dialog").close());
 $("edit-dialog").addEventListener("close", () => editForm?.destroy());
-for (const mode of ["active", "history"]) $(mode).addEventListener("click", () => {
-  view = mode;
-  for (const id of ["active", "history"]) {
-    $(id).classList.toggle("selected", id === mode);
-    $(id).setAttribute("aria-pressed", String(id === mode));
-  }
-  render();
+$("folder").addEventListener("click", async () => {
+  try { await request({ type: "queue" }); window.close(); }
+  catch (error) { $("error").textContent = errorText(error); }
 });
-$("search").addEventListener("input", render);
 $("refresh").addEventListener("click", load);
 const port = messenger.runtime.connect({ name: "queue" });
 port.onMessage.addListener(() => void load());

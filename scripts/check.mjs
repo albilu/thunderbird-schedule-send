@@ -35,7 +35,7 @@ for (const path of paths) {
 const manifest = await json("extension/manifest.json");
 const pkg = await json("package.json");
 assert.equal(manifest.version, pkg.version);
-for (const value of [manifest.background.page, manifest.compose_action.default_popup, manifest.options_ui.page,
+for (const value of [manifest.background.page, manifest.compose_action.default_popup, manifest.message_display_action.default_popup,
   ...Object.values(manifest.icons), manifest.experiment_apis.scheduleBridge.schema, manifest.experiment_apis.scheduleBridge.parent.script]) {
   assert(paths.includes(resolve(root, "extension", value)), `Missing packaged file: ${value}`);
 }

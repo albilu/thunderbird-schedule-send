@@ -1,16 +1,18 @@
 import { Scheduler } from "../lib/engine.mjs";
-import { ScheduleStore } from "../lib/store.mjs";
+import { FolderStore, nativePayload } from "../lib/folder-store.mjs";
 import { localZone, ScheduleError } from "../lib/schedule.mjs";
 
 const api = messenger;
-const store = new ScheduleStore();
+const store = new FolderStore(api.scheduleBridge);
 const captures = new Set();
 const ports = new Set();
 const notified = new Set();
 const MAX_BYTES = 50 * 1024 * 1024;
-let queueTabId;
 
 async function changed() {
+  // Metadata is already committed; a folder repaint/cleanup failure cannot
+  // turn a confirmed SMTP send into an automatic retry.
+  await store.sync().catch(error => console.error("Scheduled Send folder update failed", error));
   // A cosmetic failure must never make a committed schedule appear unsaved.
   try {
     const jobs = await store.all();
@@ -35,25 +37,13 @@ async function changed() {
   } catch (error) { console.error("Scheduled Send UI update failed", error); }
 }
 
-function base64(bytes) {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 32768) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-  }
-  return btoa(binary);
-}
-
 const scheduler = new Scheduler({ store, changed,
+  isPresent: job => api.scheduleBridge.hasQueued(job.id),
   online: async () => navigator.onLine && await api.scheduleBridge.isOnline(),
-  deliver: async payload => {
-    const attachments = [];
-    for (const attachment of payload.attachments) {
-      attachments.push({ name: attachment.name, type: attachment.type,
-        base64: base64(new Uint8Array(await attachment.file.arrayBuffer())) });
-    }
-    try { return await api.scheduleBridge.deliver({ ...payload, attachments }); }
+  deliver: async (payload, job) => {
+    try { return await api.scheduleBridge.deliver(await nativePayload(payload), job.id); }
     catch (error) {
-      if (error.message.includes("errorOffline")) error.code = "errorOffline";
+      for (const code of ["errorOffline", "errorQueueRemoved"]) if (error.message.includes(code)) error.code = code;
       throw error;
     }
   }
@@ -98,17 +88,21 @@ async function schedule(tabId, rule) {
 }
 
 async function openQueue() {
-  if (queueTabId !== undefined) {
-    try { await api.tabs.update(queueTabId, { active: true }); return; } catch { queueTabId = undefined; }
-  }
-  const tab = await api.tabs.create({ url: api.runtime.getURL("queue/queue.html") });
-  queueTabId = tab.id;
+  await ready;
+  const folder = await api.scheduleBridge.queueFolder();
+  const existing = (await api.mailTabs.query({})).find(tab => tab.displayedFolder?.id === folder.id);
+  if (existing) await api.tabs.update(existing.id, { active: true });
+  else await api.mailTabs.create({ displayedFolder: folder.id, sortType: "date", sortOrder: "ascending" });
 }
 
 const ready = (async () => {
   await api.scheduleBridge.start();
   await store.open();
+  await store.migrate();
   await scheduler.initialize();
+  // Thunderbird waits for a paint even in hidden message panes. This cosmetic
+  // update must not block startup or the scheduler.
+  void api.messageDisplayAction.disable().catch(console.error);
   api.alarms.create("heartbeat", { periodInMinutes: 1 });
 })();
 
@@ -125,6 +119,11 @@ api.runtime.onMessage.addListener(async (message, sender) => {
     switch (message.type) {
       case "schedule": return { ok: true, job: await schedule(message.tabId, message.rule) };
       case "list": return { ok: true, jobs: await store.all(), online: navigator.onLine && await api.scheduleBridge.isOnline(), timeZone: localZone() };
+      case "selected": {
+        const id = await api.scheduleBridge.queuedId(message.messageId);
+        return { ok: true, job: id ? await store.get(id) : null,
+          online: navigator.onLine && await api.scheduleBridge.isOnline(), timeZone: localZone() };
+      }
       case "act": return { ok: true, job: await scheduler.act(message.id, message.action, message.options) };
       case "queue": await openQueue(); return { ok: true };
       case "restore": {
@@ -154,4 +153,25 @@ api.alarms.onAlarm.addListener(alarm => { if (["heartbeat", "next-send"].include
 window.addEventListener("online", tick);
 api.browserAction.onClicked.addListener(openQueue);
 api.notifications.onClicked.addListener(openQueue);
+api.scheduleBridge.onQueueChanged.addListener(ids => {
+  // Capture removal intent even if Thunderbird immediately undoes a move.
+  void ready.then(async () => {
+    await scheduler.cancelRemoved(ids);
+    await scheduler.tick();
+  }).catch(error => console.error("Scheduled Send folder reconciliation failed", error));
+});
+const updateMessageAction = async (tab, message) => {
+  try {
+    await ready;
+    const id = message && await api.scheduleBridge.queuedId(message.id);
+    if (id) await api.messageDisplayAction.enable(tab.id);
+    else await api.messageDisplayAction.disable(tab.id);
+  } catch (error) { console.error("Scheduled Send message controls failed", error); }
+};
+api.messageDisplay.onMessageDisplayed.addListener(updateMessageAction);
+ready.then(async () => {
+  for (const tab of await api.tabs.query({})) {
+    if (["mail", "messageDisplay"].includes(tab.type)) void updateMessageAction(tab, await api.messageDisplay.getDisplayedMessage(tab.id));
+  }
+}).catch(console.error);
 ready.then(tick).catch(error => console.error("Scheduled Send initialization failed", error));

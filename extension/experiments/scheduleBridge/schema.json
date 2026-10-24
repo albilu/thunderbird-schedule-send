@@ -2,11 +2,143 @@
   {
     "namespace": "scheduleBridge",
     "functions": [
-      { "name": "start", "type": "function", "async": true, "parameters": [] },
-      { "name": "isOnline", "type": "function", "async": true, "parameters": [] },
-      { "name": "capture", "type": "function", "async": true, "parameters": [{ "name": "tabId", "type": "integer" }] },
-      { "name": "release", "type": "function", "async": true, "parameters": [{ "name": "tabId", "type": "integer" }, { "name": "close", "type": "boolean" }] },
-      { "name": "deliver", "type": "function", "async": true, "parameters": [{ "name": "payload", "type": "any" }] }
+      {
+        "name": "start",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "isOnline",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "capture",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "release",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "close",
+            "type": "boolean"
+          }
+        ]
+      },
+      {
+        "name": "deliver",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "payload",
+            "type": "any"
+          },
+          {
+            "name": "id",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "stage",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          },
+          {
+            "name": "payload",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "hasQueued",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "id",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "queueFolder",
+        "type": "function",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "queuedId",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "updateQueued",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "job",
+            "type": "any"
+          }
+        ]
+      },
+      {
+        "name": "removeQueued",
+        "type": "function",
+        "async": true,
+        "parameters": [
+          {
+            "name": "id",
+            "type": "string"
+          },
+          {
+            "name": "permanent",
+            "type": "boolean"
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onQueueChanged",
+        "type": "function",
+        "parameters": [
+          {
+            "name": "ids",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
+      }
     ]
   }
 ]

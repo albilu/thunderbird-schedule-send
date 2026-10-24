@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title data-i18n="manageSchedule">Manage schedule</title><link rel="stylesheet" href="../styles/common.css"><link rel="stylesheet" href="message.css"></head>
+<body>
+  <header><div><p class="eyebrow" data-i18n="extensionName"></p><h1 data-i18n="manageSchedule"></h1></div><button id="refresh" class="subtle" data-i18n="refresh"></button></header>
+  <main>
+    <p id="connection" class="hint" role="status"></p>
+    <p id="error" class="error" role="alert"></p>
+    <p id="feedback" role="status" class="hint"></p>
+    <section id="message" aria-live="polite" aria-busy="true"></section>
+    <p class="hint note" data-i18n="folderNote"></p>
+  </main>
+  <footer><button id="folder" class="subtle" data-i18n="viewQueue"></button></footer>
+  <dialog id="confirmation" aria-labelledby="confirmation-title"><h2 id="confirmation-title"></h2><p id="confirmation-text"></p><form method="dialog" class="actions"><button value="cancel" data-i18n="keepMessage"></button><button id="confirm-action" value="confirm" class="primary"></button></form></dialog>
+  <dialog id="edit-dialog" aria-labelledby="edit-title"><h2 id="edit-title" data-i18n="reschedule"></h2><form id="edit-form"><div id="edit-rule"></div><p id="edit-error" class="error" role="alert"></p><div class="actions"><button id="close-edit" type="button" data-i18n="close"></button><button id="save-edit" class="primary" type="submit" data-i18n="saveSchedule"></button></div></form></dialog>
+  <script type="module" src="message.mjs"></script>
+</body></html>

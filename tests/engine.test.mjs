@@ -50,6 +50,85 @@ test("offline delivery stays pending and waits for reconnection", async () => {
   assert.equal(f.sent.length, 1);
 });
 
+test("deleting or moving a queued message cancels even while offline or paused", async () => {
+  for (const status of ["pending", "paused", "review"]) {
+    const f = fixture();
+    const job = await f.create();
+    await f.store.put({ ...job, status });
+    f.scheduler.isPresent = async () => false;
+    f.setOnline(false);
+    await f.scheduler.tick();
+    assert.equal((await f.store.get(job.id)).status, "cancelled");
+    assert.equal(await f.store.payload(job.id), undefined);
+    f.setOnline(true); f.advance(60000);
+    await f.scheduler.tick();
+    assert.equal(f.sent.length, 0);
+  }
+});
+
+test("removing a message during preparation prevents transport", async () => {
+  const f = fixture();
+  const job = await f.create(); f.advance(60000);
+  let checks = 0;
+  f.scheduler.isPresent = async () => ++checks === 1;
+  await f.scheduler.tick();
+  assert.equal((await f.store.get(job.id)).status, "cancelled");
+  assert.equal(f.sent.length, 0);
+});
+
+test("native pre-transport cancellation removes the payload without a retry", async () => {
+  const f = fixture(async () => { const error = new Error("removed"); error.code = "errorQueueRemoved"; throw error; });
+  const job = await f.create(); f.advance(60000);
+  await f.scheduler.tick();
+  assert.equal((await f.store.get(job.id)).status, "cancelled");
+  assert.equal(await f.store.payload(job.id), undefined);
+});
+
+test("undoing a native deletion cannot reactivate its captured schedule", async () => {
+  const f = fixture();
+  const job = await f.create();
+  // The message is already back in the folder by the time its event is handled.
+  f.scheduler.isPresent = async () => true;
+  await f.scheduler.cancelRemoved([job.id, job.id]);
+  f.advance(60000);
+  await f.scheduler.tick();
+  assert.equal((await f.store.get(job.id)).status, "cancelled");
+  assert.equal(await f.store.payload(job.id), undefined);
+  assert.equal(f.sent.length, 0);
+});
+
+test("a removal event takes effect before a running tick sends its next message", async () => {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let sends = 0;
+  const f = fixture(async () => { sends++; entered.resolve(); await release.promise; });
+  await f.create();
+  const second = await f.create();
+  f.advance(60000);
+  const tick = f.scheduler.tick();
+  await entered.promise;
+  const cancellation = f.scheduler.cancelRemoved([second.id]);
+  release.resolve();
+  await Promise.all([tick, cancellation]);
+  assert.equal(sends, 1);
+  assert.equal((await f.store.get(second.id)).status, "cancelled");
+});
+
+test("missing queued copies cannot be resumed; folder errors cannot cause a send", async () => {
+  const f = fixture();
+  const job = await f.create();
+  await f.scheduler.act(job.id, "pause");
+  f.scheduler.isPresent = async () => false;
+  await assert.rejects(f.scheduler.act(job.id, "resume"), /errorQueueRemoved/);
+  assert.equal((await f.store.get(job.id)).status, "cancelled");
+  const next = await f.create();
+  f.scheduler.isPresent = async () => { throw new Error("Folder unavailable"); };
+  f.advance(60000);
+  await assert.rejects(f.scheduler.tick(), /Folder unavailable/);
+  assert.equal((await f.store.get(next.id)).status, "pending");
+  assert.equal(f.sent.length, 0);
+});
+
 test("going offline immediately before transport is safely retryable", async () => {
   const f = fixture(async () => { const error = new Error("offline"); error.code = "errorOffline"; throw error; });
   const job = await f.create(); f.advance(60000);

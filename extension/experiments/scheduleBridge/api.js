@@ -76,11 +76,166 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
       if (!window?.gMsgCompose || window.closed) throw new ExtensionError("errorCompose");
       return window;
     };
+    const queueMessageID = id => {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)) throw new ExtensionError("errorAction");
+      return `scheduled-send-${id}@scheduled-send.local`;
+    };
+    const ownedFolder = create => {
+      let server;
+      try { server = MailServices.accounts.localFoldersServer; } catch { /* No local account yet. */ }
+      if (!server && create) {
+        MailServices.accounts.createLocalMailAccount();
+        server = MailServices.accounts.localFoldersServer;
+      }
+      if (!server) return null;
+      const root = server.rootFolder;
+      const find = folder => {
+        for (const child of folder.subFolders) {
+          // Deleting the queue folder moves it under Trash. Never discover it
+          // there and accidentally reactivate messages the user has deleted.
+          if (child.flags & Ci.nsMsgFolderFlags.Trash) continue;
+          if (child.getStringProperty("scheduledSendOwner") === context.extension.id) return child;
+          const nested = find(child);
+          if (nested) return nested;
+        }
+        return null;
+      };
+      const existing = find(root);
+      if (existing || !create) return existing;
+      const label = context.extension.localeData.localizeMessage("queueFolder");
+      let name = label, suffix = 2;
+      while (root.containsChildNamed(name)) name = `${label} (${suffix++})`;
+      root.createSubfolder(name, null);
+      const folder = root.getChildNamed(name);
+      folder.setStringProperty("scheduledSendOwner", context.extension.id);
+      return folder;
+    };
+    const findQueued = id => ownedFolder(false)?.msgDatabase.getMsgHdrForMessageID(queueMessageID(id)) || null;
+    const processMessage = async (payload, stagedJob = null, sendId = null) => {
+      if (!stagedJob && Services.io.offline) throw new ExtensionError("errorOffline");
+      const { details, native, attachments } = payload;
+      if (details.selectedEncryptionTechnology?.encryptBody || details.selectedEncryptionTechnology?.signMessage || details.attachPublicPGPKey) {
+        throw new ExtensionError("errorEncryption");
+      }
+      const identity = MailServices.accounts.getIdentity(details.identityId);
+      const account = [...MailServices.accounts.accounts].find(a => [...a.identities].some(i => i.key === details.identityId));
+      if (!identity || !account) throw new ExtensionError("errorIdentity");
+      if (!native.to && !native.cc && !native.bcc) throw new ExtensionError("errorRecipients");
+      if (native.newsgroups) throw new ExtensionError("errorNewsgroups");
+      const directory = PathUtils.join(PathUtils.tempDir, `scheduled-send-${Services.uuid.generateUUID().toString().slice(1, -1)}`);
+      await IOUtils.makeDirectory(directory, { permissions: 0o700 });
+      let accepted = false;
+      let messageId = null;
+      let messageFile = null;
+      const compose = Cc["@mozilla.org/messengercompose/compose;1"].createInstance(Ci.nsIMsgCompose);
+      const listener = {
+        QueryInterface: ChromeUtils.generateQI(["nsIMsgSendListener", "nsIMsgCopyServiceListener"]),
+        onStartSending() {}, onProgress() {}, onStatus() {}, onGetDraftFolderURI() {},
+        onSendNotPerformed() {}, onTransportSecurityError() {},
+        onStartCopy() {}, onStopCopy() {}, setMessageKey() {},
+        getMessageId() { return messageId || ""; },
+        onStopSending(id, status, message, file) {
+          if (stagedJob) { messageFile = file; return; }
+          if (Components.isSuccessCode(status)) { accepted = true; messageId = id; }
+        }
+      };
+      try {
+        const fields = Cc["@mozilla.org/messengercompose/composefields;1"].createInstance(Ci.nsIMsgCompFields);
+        const params = Cc["@mozilla.org/messengercompose/composeparams;1"].createInstance(Ci.nsIMsgComposeParams);
+        params.type = Ci.nsIMsgCompType.New;
+        params.identity = identity;
+        params.composeFields = fields;
+        compose.initialize(params);
+        for (const name of ["from", "to", "cc", "bcc", "replyTo", "followupTo", "references", "fcc", "fcc2", "contentLanguage"]) {
+          if (native[name]) fields[name] = native[name];
+        }
+        fields.subject = details.subject;
+        fields.body = details.isPlainText ? details.plainTextBody : details.body;
+        const formats = Ci.nsIMsgCompSendFormat;
+        const plain = details.isPlainText || details.deliveryFormat === "plaintext";
+        fields.forcePlainText = plain;
+        fields.useMultipartAlternative = !plain && details.deliveryFormat !== "html";
+        fields.deliveryFormat = plain ? formats.PlainText : fields.useMultipartAlternative ? formats.Both : formats.HTML;
+        fields.returnReceipt = Boolean(details.returnReceipt);
+        fields.DSN = Boolean(details.deliveryStatusNotification);
+        fields.attachVCard = Boolean(details.attachVCard);
+        fields.priority = details.priority || "normal";
+        for (const header of details.customHeaders || []) {
+          if (/^X-[A-Za-z0-9-]+$/i.test(header.name) && !/[\r\n]/.test(header.value)) fields.setHeader(header.name, header.value);
+        }
+        let size = 0;
+        for (const [index, attachment] of attachments.entries()) {
+          const bytes = new Uint8Array(ChromeUtils.base64URLDecode(attachment.base64.replaceAll("+", "-").replaceAll("/", "_"), { padding: "ignore" }));
+          size += bytes.length;
+          if (size > MAX_BYTES) throw new ExtensionError("errorTooLarge");
+          const path = PathUtils.join(directory, String(index));
+          await IOUtils.write(path, bytes, { permissions: 0o600 });
+          const nativeAttachment = Cc["@mozilla.org/messengercompose/attachment;1"].createInstance(Ci.nsIMsgAttachment);
+          nativeAttachment.url = Services.io.newFileURI(fileAt(path)).spec;
+          nativeAttachment.name = attachment.name;
+          nativeAttachment.contentType = attachment.type || "application/octet-stream";
+          fields.addAttachment(nativeAttachment);
+        }
+        if (details.attachVCard && identity.escapedVCard) {
+          const card = Cc["@mozilla.org/messengercompose/attachment;1"].createInstance(Ci.nsIMsgAttachment);
+          card.name = `${identity.email.split("@")[0].replaceAll(".", "_") || "vcard"}.vcf`;
+          card.contentType = "text/vcard";
+          card.url = `data:text/vcard;charset=utf-8,${identity.escapedVCard}`;
+          fields.addAttachment(card);
+        }
+        if (!stagedJob && Services.io.offline) throw new ExtensionError("errorOffline");
+        // MessageSend accepts a detached editor adapter. Its native MIME
+        // builder then collects data images into multipart/related and
+        // rewrites the HTML CIDs together, without opening a compose window.
+        const document = details.isPlainText ? null : new DOMParser().parseFromString(details.body, "text/html");
+        const editor = document ? { document, outputToString: () => document.documentElement.outerHTML } : null;
+        if (stagedJob) {
+          fields.messageId = `<${queueMessageID(stagedJob.id)}>`;
+          fields.setRawHeader("Date", new Date(stagedJob.nextAt || stagedJob.createdAt).toUTCString());
+        } else if (sendId && !findQueued(sendId)) {
+          throw new ExtensionError("errorQueueRemoved");
+        }
+        await new MessageSend().createAndSendMessage(
+          editor, identity, account.key, fields, false, Boolean(stagedJob),
+          stagedJob ? Ci.nsIMsgSend.nsMsgSaveAsDraft : Ci.nsIMsgSend.nsMsgDeliverNow, null,
+          details.isPlainText ? "text/plain" : "text/html", fields.body,
+          null, null, listener, null, null, Ci.nsIMsgCompType.New
+        );
+        if (stagedJob) {
+          if (!messageFile) throw new ExtensionError("errorStorage");
+          await new Promise((resolve, reject) => {
+            MailServices.copy.copyFileMessage(messageFile, ownedFolder(true), null, false,
+              Ci.nsMsgMessageFlags.Read, `scheduledsend-${stagedJob.status}`, {
+                QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
+                onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
+                onStopCopy(status) {
+                  if (Components.isSuccessCode(status)) resolve();
+                  else reject(new ExtensionError("errorStorage"));
+                }
+              }, null);
+          });
+          if (!findQueued(stagedJob.id)) throw new ExtensionError("errorStorage");
+        }
+        return { messageId };
+      } catch (error) {
+        // An FCC failure after SMTP accepted the message is not a failed send.
+        if (accepted) return { messageId, warning: "errorSentCopy" };
+        console.error("Scheduled Send native delivery failed", error);
+        throw new ExtensionError(error.message || String(error));
+      } finally {
+        if (messageFile) await IOUtils.remove(messageFile.path).catch(console.error);
+        await IOUtils.remove(directory, { recursive: true }).catch(console.error);
+      }
+    };
     return {
       scheduleBridge: {
         start: async () => {
           if (this.started) return;
           this.started = true;
+          ownedFolder(true);
+          for (const [status, color] of Object.entries({pending: "#1373d9", paused: "#777777", review: "#b45309", sending: "#1373d9", sent: "#238636", cancelled: "#777777"})) {
+            MailServices.tags.addTagForKey(`scheduledsend-${status}`, context.extension.localeData.localizeMessage(`status_${status}`), color, "");
+          }
           const id = `${ExtensionCommon.makeWidgetId(context.extension.id)}-composeAction-toolbarbutton`;
           ExtensionSupport.registerWindowListener(this.listenerId, {
             chromeURLs: [COMPOSE_URL],
@@ -152,98 +307,62 @@ var scheduleBridge = class extends ExtensionCommon.ExtensionAPI {
             window.close();
           }
         },
-        deliver: async payload => {
-          if (Services.io.offline) throw new ExtensionError("errorOffline");
-          const { details, native, attachments } = payload;
-          if (details.selectedEncryptionTechnology?.encryptBody || details.selectedEncryptionTechnology?.signMessage || details.attachPublicPGPKey) {
-            throw new ExtensionError("errorEncryption");
+        deliver: async (payload, id) => processMessage(payload, null, id),
+        stage: async (job, payload) => {
+          queueMessageID(job.id);
+          ownedFolder(true);
+          if (!findQueued(job.id)) await processMessage(payload, job);
+        },
+        hasQueued: async id => Boolean(findQueued(id)),
+        queueFolder: async () => context.extension.folderManager.convert(ownedFolder(true)),
+        queuedId: async messageId => {
+          const header = context.extension.messageManager.get(messageId);
+          if (!header || header.folder?.URI !== ownedFolder(false)?.URI) return null;
+          return /^scheduled-send-([0-9a-f-]{36})@scheduled-send\.local$/.exec(header.messageId)?.[1] || null;
+        },
+        updateQueued: async job => {
+          const header = findQueued(job.id);
+          if (!header) return;
+          const key = `scheduledsend-${job.status}`;
+          const old = header.getStringProperty("keywords").split(" ").filter(k => k.startsWith("scheduledsend-") && k !== key);
+          if (old.length) header.folder.removeKeywordsFromMessages([header], old.join(" "));
+          if (!header.getStringProperty("keywords").split(" ").includes(key)) header.folder.addKeywordsToMessages([header], key);
+          if (job.nextAt) header.date = job.nextAt * 1000;
+        },
+        removeQueued: async (id, permanent) => {
+          const header = findQueued(id);
+          if (!header) return;
+          await new Promise((resolve, reject) => header.folder.deleteMessages([header], null, permanent, false, {
+            QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
+            onStartCopy() {}, onProgress() {}, setMessageKey() {}, getMessageId() { return ""; },
+            onStopCopy(status) {
+              if (Components.isSuccessCode(status)) resolve();
+              else reject(new ExtensionError("errorStorage"));
+            }
+          }, false));
+        },
+        onQueueChanged: new ExtensionCommon.EventManager({
+          context, name: "scheduleBridge.onQueueChanged",
+          register: fire => {
+            const notify = headers => {
+              const ids = [...headers]
+                .filter(h => h.folder?.getStringProperty("scheduledSendOwner") === context.extension.id)
+                .map(h => /^scheduled-send-([0-9a-f-]{36})@scheduled-send\.local$/.exec(h.messageId)?.[1]).filter(Boolean);
+              if (ids.length) fire.async(ids);
+            };
+            const listener = {
+              msgsDeleted: notify,
+              msgsMoveCopyCompleted: (move, headers) => { if (move) notify(headers); },
+              folderDeleted: folder => {
+                if (folder.getStringProperty("scheduledSendOwner") !== context.extension.id) return;
+                try { notify(folder.messages); } catch { /* Deleted database: reconcile missing copies. */ }
+                fire.async([]);
+              }
+            };
+            MailServices.mfn.addListener(listener, MailServices.mfn.msgsDeleted | MailServices.mfn.msgsMoveCopyCompleted | MailServices.mfn.folderDeleted);
+            return () => MailServices.mfn.removeListener(listener);
           }
-          const identity = MailServices.accounts.getIdentity(details.identityId);
-          const account = [...MailServices.accounts.accounts].find(a => [...a.identities].some(i => i.key === details.identityId));
-          if (!identity || !account) throw new ExtensionError("errorIdentity");
-          if (!native.to && !native.cc && !native.bcc) throw new ExtensionError("errorRecipients");
-          if (native.newsgroups) throw new ExtensionError("errorNewsgroups");
-          const directory = PathUtils.join(PathUtils.tempDir, `scheduled-send-${Services.uuid.generateUUID().toString().slice(1, -1)}`);
-          await IOUtils.makeDirectory(directory, { permissions: 0o700 });
-          let accepted = false;
-          let messageId = null;
-          const compose = Cc["@mozilla.org/messengercompose/compose;1"].createInstance(Ci.nsIMsgCompose);
-          const listener = {
-            QueryInterface: ChromeUtils.generateQI(["nsIMsgSendListener", "nsIMsgCopyServiceListener"]),
-            onStartSending() {}, onProgress() {}, onStatus() {}, onGetDraftFolderURI() {},
-            onSendNotPerformed() {}, onTransportSecurityError() {},
-            onStartCopy() {}, onStopCopy() {}, setMessageKey() {},
-            getMessageId() { return messageId || ""; },
-            onStopSending(id, status) {
-              if (Components.isSuccessCode(status)) { accepted = true; messageId = id; }
-            }
-          };
-          try {
-            const fields = Cc["@mozilla.org/messengercompose/composefields;1"].createInstance(Ci.nsIMsgCompFields);
-            const params = Cc["@mozilla.org/messengercompose/composeparams;1"].createInstance(Ci.nsIMsgComposeParams);
-            params.type = Ci.nsIMsgCompType.New;
-            params.identity = identity;
-            params.composeFields = fields;
-            compose.initialize(params);
-            for (const name of ["from", "to", "cc", "bcc", "replyTo", "followupTo", "references", "fcc", "fcc2", "contentLanguage"]) {
-              if (native[name]) fields[name] = native[name];
-            }
-            fields.subject = details.subject;
-            fields.body = details.isPlainText ? details.plainTextBody : details.body;
-            const formats = Ci.nsIMsgCompSendFormat;
-            const plain = details.isPlainText || details.deliveryFormat === "plaintext";
-            fields.forcePlainText = plain;
-            fields.useMultipartAlternative = !plain && details.deliveryFormat !== "html";
-            fields.deliveryFormat = plain ? formats.PlainText : fields.useMultipartAlternative ? formats.Both : formats.HTML;
-            fields.returnReceipt = Boolean(details.returnReceipt);
-            fields.DSN = Boolean(details.deliveryStatusNotification);
-            fields.attachVCard = Boolean(details.attachVCard);
-            fields.priority = details.priority || "normal";
-            for (const header of details.customHeaders || []) {
-              if (/^X-[A-Za-z0-9-]+$/i.test(header.name) && !/[\r\n]/.test(header.value)) fields.setHeader(header.name, header.value);
-            }
-            let size = 0;
-            for (const [index, attachment] of attachments.entries()) {
-              const bytes = new Uint8Array(ChromeUtils.base64URLDecode(attachment.base64.replaceAll("+", "-").replaceAll("/", "_"), { padding: "ignore" }));
-              size += bytes.length;
-              if (size > MAX_BYTES) throw new ExtensionError("errorTooLarge");
-              const path = PathUtils.join(directory, String(index));
-              await IOUtils.write(path, bytes, { permissions: 0o600 });
-              const nativeAttachment = Cc["@mozilla.org/messengercompose/attachment;1"].createInstance(Ci.nsIMsgAttachment);
-              nativeAttachment.url = Services.io.newFileURI(fileAt(path)).spec;
-              nativeAttachment.name = attachment.name;
-              nativeAttachment.contentType = attachment.type || "application/octet-stream";
-              fields.addAttachment(nativeAttachment);
-            }
-            if (details.attachVCard && identity.escapedVCard) {
-              const card = Cc["@mozilla.org/messengercompose/attachment;1"].createInstance(Ci.nsIMsgAttachment);
-              card.name = `${identity.email.split("@")[0].replaceAll(".", "_") || "vcard"}.vcf`;
-              card.contentType = "text/vcard";
-              card.url = `data:text/vcard;charset=utf-8,${identity.escapedVCard}`;
-              fields.addAttachment(card);
-            }
-            if (Services.io.offline) throw new ExtensionError("errorOffline");
-            // MessageSend accepts a detached editor adapter. Its native MIME
-            // builder then collects data images into multipart/related and
-            // rewrites the HTML CIDs together, without opening a compose window.
-            const document = details.isPlainText ? null : new DOMParser().parseFromString(details.body, "text/html");
-            const editor = document ? { document, outputToString: () => document.documentElement.outerHTML } : null;
-            await new MessageSend().createAndSendMessage(
-              editor, identity, account.key, fields, false, false,
-              Ci.nsIMsgSend.nsMsgDeliverNow, null,
-              details.isPlainText ? "text/plain" : "text/html", fields.body,
-              null, null, listener, null, null, Ci.nsIMsgCompType.New
-            );
-            return { messageId };
-          } catch (error) {
-            // An FCC failure after SMTP accepted the message is not a failed send.
-            if (accepted) return { messageId, warning: "errorSentCopy" };
-            console.error("Scheduled Send native delivery failed", error);
-            throw new ExtensionError(error.message || String(error));
-          } finally {
-            await IOUtils.remove(directory, { recursive: true }).catch(console.error);
-          }
-        }
+        }).api()
       }
     };
   }
