@@ -2,7 +2,7 @@
 """Native integration tests: disposable Thunderbird profile + loopback IMAP/SMTP.
 
 Never opens the user's profile. Mail is captured locally, not relayed. Requires
-Thunderbird 153+, Xvfb and optionally xfwm4 / ImageMagick for UI screenshots.
+Thunderbird 128+, Xvfb and optionally xfwm4 / ImageMagick for UI screenshots.
 No Python packages or downloaded browser drivers are needed.
 """
 import base64
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCALE = os.environ.get("SCHEDULE_TEST_LOCALE", "en-US")
 LANGUAGE = "fr" if LOCALE.startswith("fr") else "en"
 MESSAGES = json.loads((ROOT / f"extension/_locales/{LANGUAGE}/messages.json").read_text())
-RESULTS = ROOT / "test-results" / LOCALE
+RESULTS = Path(os.environ.get("SCHEDULE_TEST_RESULTS", ROOT / "test-results" / LOCALE))
 ADDON = "scheduled-send@thunderbird-schedule-send.local"
 QUEUE = "message/message.html?integration"
 MANAGE = "message/message.html"
@@ -218,10 +218,15 @@ def tagged_draft_test(client, imap, smtp):
     client.wait("return taggedCompose.closed;")
     remaining = [m for m in imap.mailboxes["Drafts"] if b"Subject: Tagged" in m["raw"] and "\\Deleted" not in m["flags"]]
     assert len(remaining) == 1, [(m["uid"], sorted(m["flags"])) for m in remaining]
-    deadline = time.monotonic() + 10
-    while original in imap.mailboxes["Drafts"] and time.monotonic() < deadline:
-        time.sleep(.1)  # Thunderbird can report deletion before UID EXPUNGE finishes.
-    assert original not in imap.mailboxes["Drafts"], "The original draft must be replaced on the server"
+    # Older Thunderbird versions mark IMAP messages deleted without immediately
+    # expunging them. Require server-side deletion and exactly one visible draft.
+    assert original not in imap.mailboxes["Drafts"] or "\\Deleted" in original["flags"], "The original draft must be deleted on the server"
+    visible = client.background(f"""
+      const api = {API};
+      const folder = await api.scheduleBridge.draftsFolder(null);
+      return (await api.messages.list(folder.id)).messages.filter(m => m.subject.startsWith('Tagged')).map(m => m.subject);
+    """)
+    assert visible == ["Tagged edited draft"], visible
     assert {"project-tag", "scheduledsend-pending"}.issubset(remaining[0]["flags"]), remaining[0]["flags"]
     assert b"Edited tagged draft contents." in remaining[0]["raw"]
     for action, status in [("pause", "paused"), ("resume", "pending")]:
@@ -268,7 +273,8 @@ def scheduled_button_test(client, imap):
       server.prettyName = 'Second IMAP test account';
       const identity = MailServices.accounts.createIdentity();
       identity.email = 'second@example.invalid';
-      identity.draftsFolderURI = server.serverURI + '/Drafts';
+      if ('draftsFolderURI' in identity) identity.draftsFolderURI = server.serverURI + '/Drafts';
+      else identity.draftFolder = server.serverURI + '/Drafts';
       const account = MailServices.accounts.createAccount();
       account.incomingServer = server;
       account.addIdentity(identity);
@@ -299,7 +305,7 @@ def scheduled_button_test(client, imap):
 
 def run_tests(client, xpi, smtp, imap):
     client.script("Services.io.offline = false;")
-    # Capture actual decoded native alerts, without displaying desktop notices.
+    # Capture native alerts across both service APIs without desktop notices.
     client.script("""
       globalThis.nativeNotifications = [];
       const alerts = {
@@ -307,6 +313,9 @@ def run_tests(client, xpi, smtp, imap):
         showAlert(alert, listener) {
           nativeNotifications.push({name: alert.name, title: alert.title, imageURL: alert.imageURL});
           listener?.observe(null, 'alertshow', alert.name);
+        },
+        showAlertNotification(imageURL, title, text, clickable, cookie, listener, name) {
+          this.showAlert({imageURL, title, name}, listener);
         },
         closeAlert() {}
       };
@@ -714,6 +723,12 @@ def run_tests(client, xpi, smtp, imap):
     assert notification["imageURL"] == app_icon and notification["title"] == MESSAGES["queueTitle"]["message"], notification
     icon_bytes = base64.b64decode(app_icon.split(",", 1)[1])
     assert icon_bytes.startswith(b"\x89PNG\r\n\x1a\n") and int.from_bytes(icon_bytes[16:20], "big") == 64
+    assert client.async_script("""
+      const image = new (Services.wm.getMostRecentWindow('mail:3pane').Image)();
+      image.src = arguments[0];
+      await image.decode();
+      return [image.naturalWidth, image.naturalHeight];
+    """, app_icon) == [64, 64]
     print("PASS: scheduled-message notifications decode and display Thunderbird's application icon", flush=True)
 
     scheduled_button_test(client, imap)
@@ -737,7 +752,7 @@ def run_tests(client, xpi, smtp, imap):
 def main():
     thunderbird = shutil.which(os.environ.get("THUNDERBIRD_BINARY", "thunderbird"))
     if not thunderbird or not shutil.which("Xvfb"):
-        raise SystemExit("Install Thunderbird 153+ and Xvfb to run the native integration tests.")
+        raise SystemExit("Install Thunderbird 128+ and Xvfb to run the native integration tests.")
     RESULTS.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, str(ROOT / "scripts/package.py")], check=True)
     version = json.loads((ROOT / "extension/manifest.json").read_text())["version"]

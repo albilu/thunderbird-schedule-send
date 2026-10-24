@@ -64,7 +64,8 @@ var DraftMailbox = class {
   folder(identityId, uri) {
     const identity = MailServices.accounts.getIdentity(identityId);
     if (!identity) throw new ExtensionError("errorIdentity");
-    const configuredURI = uri || identity.draftsFolderURI;
+    // Thunderbird renamed the identity's folder properties after 128 ESR.
+    const configuredURI = uri || identity.draftsFolderURI || identity.draftFolder;
     if (!configuredURI?.startsWith("imap:")) throw new ExtensionError("errorServerDrafts");
     const folder = MailUtils.getOrCreateFolder(configuredURI);
     if (!folder || folder.server.type !== "imap") throw new ExtensionError("errorServerDrafts");
@@ -296,7 +297,7 @@ var DraftMailbox = class {
     }
     if (!fields.to && !fields.cc && !fields.bcc) throw new ExtensionError("errorRecipients");
     if (DraftMime.get(current.raw, "newsgroups")) throw new ExtensionError("errorNewsgroups");
-    fields.fcc = DraftMime.get(current.raw, "fcc") || identity.fccFolderURI;
+    fields.fcc = DraftMime.get(current.raw, "fcc") || identity.fccFolderURI || identity.fccFolder;
     fields.DSN = /(?:^|;)\s*DSN=1(?:;|$)/i.test(DraftMime.get(current.raw, "x-mozilla-draft-info"));
     const messageId = Cc["@mozilla.org/messengercompose/computils;1"].createInstance(Ci.nsIMsgCompUtils)
       .msgGenerateMessageId(identity, identity.email.split("@")[1]);
@@ -308,14 +309,33 @@ var DraftMailbox = class {
     try {
       if (Services.io.offline) throw new ExtensionError("errorOffline");
       if (this.editing.has(job.id) || !this.header(job)) throw new ExtensionError("errorQueueRemoved");
-      await new MessageSend().sendMessageFile(identity, account.key, fields, fileAt(path), false, false,
-        Ci.nsIMsgSend.nsMsgDeliverNow, null, {
+      await new Promise((resolve, reject) => {
+        const sender = new MessageSend();
+        const failure = () => reject(new ExtensionError(accepted ? "errorSentCopy" : "errorDelivery"));
+        // Older releases resolve sendMessageFile after SMTP, before the Sent
+        // copy. Keep the source file until the native copy listener finishes.
+        // Their final copy-failure path calls fail() without onStopCopy().
+        const nativeFail = sender.fail;
+        sender.fail = function(...args) { failure(); return nativeFail.apply(this, args); };
+        const listener = {
           QueryInterface: ChromeUtils.generateQI(["nsIMsgSendListener", "nsIMsgCopyServiceListener"]),
           onStartSending() {}, onProgress() {}, onStatus() {}, onGetDraftFolderURI() {},
-          onSendNotPerformed() {}, onTransportSecurityError() {}, onStartCopy() {}, onStopCopy() {}, setMessageKey() {},
+          onTransportSecurityError() {}, onStartCopy() {}, setMessageKey() {},
+          onSendNotPerformed: failure,
+          onStopCopy(status) { if (Components.isSuccessCode(status)) resolve(); else failure(); },
           getMessageId() { return messageId; },
-          onStopSending(id, status) { if (Components.isSuccessCode(status)) accepted = true; }
-        }, null);
+          onStopSending(id, status) {
+            if (Components.isSuccessCode(status)) accepted = true;
+            else failure();
+          }
+        };
+        // MessageSend checks instanceof nsIMsgCopyServiceListener. A plain JS
+        // object with QueryInterface needs an XPCOM wrapper to pass that check.
+        const wrapped = Cc["@mozilla.org/supports-interface-pointer;1"].createInstance(Ci.nsISupportsInterfacePointer);
+        wrapped.data = listener;
+        Promise.resolve(sender.sendMessageFile(identity, account.key, fields, fileAt(path), false, false,
+          Ci.nsIMsgSend.nsMsgDeliverNow, null, wrapped.data.QueryInterface(Ci.nsIMsgSendListener), null)).catch(reject);
+      });
       return { messageId };
     } catch (error) {
       if (accepted) return { messageId, warning: "errorSentCopy" };

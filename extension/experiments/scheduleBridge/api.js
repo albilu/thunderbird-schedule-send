@@ -1,6 +1,6 @@
 /* A deliberately narrow bridge to Thunderbird's native compose services.
  * No remote code, arbitrary file paths, preferences, or commands are exposed.
- * Thunderbird 153 is the first supported/tested release of these interfaces.
+ * Thunderbird 128 is the oldest supported/tested release of these interfaces.
  */
 var { ExtensionError } = ChromeUtils.importESModule("resource://gre/modules/ExtensionUtils.sys.mjs");
 var { ExtensionCommon } = ChromeUtils.importESModule("resource://gre/modules/ExtensionCommon.sys.mjs");

@@ -18,7 +18,7 @@ Schedule and repeat emails in Thunderbird using your account’s synchronized IM
 
 ## Install
 
-The current compatibility floor is **Thunderbird 153**; native integration has been validated on **153.4.0**. This is a tested-version limit, not a confirmed minimum required by every API. Earlier releases need native compatibility testing before lowering it. Build with Python 3:
+Requires **Thunderbird 128 or newer**. Native integration is tested on **128.0** and **153.4.0** on Linux, with both English and French add-on locales. Build with Python 3:
 
 ```sh
 python3 scripts/package.py
@@ -90,16 +90,16 @@ npm test
 npm run build
 ```
 
-The checks validate JavaScript syntax, packaged paths, manifest/version consistency and English/French translation parity. Calendar and state-machine tests cover DST, leap years, month-end anchors, constraints, missed repeats, offline handling, concurrent alarms, native-folder cancellation and interruption recovery. Packaging is deterministic and includes only `extension/`.
+The checks validate JavaScript syntax, packaged paths, manifest/version consistency and English/French translation parity. Calendar and state-machine tests cover DST, leap years, month-end anchors, constraints, missed repeats, offline handling, concurrent alarms, native-folder cancellation and interruption recovery. Delivery tests cover asynchronous Sent-folder copies and failures after SMTP acceptance. Packaging is deterministic and includes only `extension/`.
 
-Native Linux integration tests use Thunderbird 153+, Xvfb, and optionally `xfwm4` and ImageMagick for screenshots:
+Native Linux integration tests use Thunderbird 128+, Xvfb, and optionally `xfwm4` and ImageMagick for screenshots:
 
 ```sh
 npm run test:thunderbird
 SCHEDULE_TEST_LOCALE=fr npm run test:thunderbird
 ```
 
-Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, replacement of tagged drafts without duplicates, tag preservation, account-specific toolbar navigation, native notification icons, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable.
+Tests create a disposable profile and virtual display, and run loopback-only IMAP and SMTP fixtures. They verify server-side storage, replacement of tagged drafts without duplicates, tag preservation, account-specific toolbar navigation, native notification icons, native draft editing, the save/close confirmation choices, restoring schedules with edited content, cancellation, metadata, MIME delivery and migration. They never open your real profile or deliver email externally. These fixtures do not replace testing against live Gmail or Yahoo accounts. Logs, results and screenshots are written under `test-results/`. Set `THUNDERBIRD_BINARY` to select a different executable and `SCHEDULE_TEST_RESULTS` to keep each version’s results in a separate directory.
 
 ## CI and releases
 
